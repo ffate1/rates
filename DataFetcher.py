@@ -36,7 +36,6 @@ class DataFetcher:
                 if next_page_url is not None:
                     next_page_url.replace("%5B", "[").replace("%5D", "]")
             
-            print(new_url)
             return self.auction_data
         
         except requests.exceptions.RequestException as e:
