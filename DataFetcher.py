@@ -10,13 +10,16 @@ class DataFetcher:
         # self.auction_fields = ""
 
     def fetch_auction_data(self,
-                           fields = ["cusip", "auction_date", "issue_date", "security_term", "avg_med_yield", "currently_outstanding", "original_security_term"]):
+                           fields : Optional[List[str]] = ["cusip", "auction_date", "issue_date", "security_term", "maturity_date", "avg_med_yield", "currently_outstanding", "original_security_term"]):
         # Fetching all historical Treasury auction data
+        
         params = {
-            "fields": ",".join(fields),
-            "sort": "auction_date",
+            "sort": "-auction_date",
             "format": "json"  # Adjust limit as needed
         }
+
+        if fields:
+            params["fields"] = ",".join(fields)
 
         try:
             response = requests.get(self.auction_base_url, params=params)
