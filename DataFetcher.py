@@ -48,7 +48,7 @@ class DataFetcher:
             print(f"Error fetching auction data: {e}")
             return None
         
-    def fetch_historical_UST_data(self, date: str = "2025-02-05")
+    def fetch_historical_UST_data(self, date: str = "2025-02-05"):
         """
         Fetches UST data from FedInvest
         
@@ -78,4 +78,28 @@ class DataFetcher:
             print(f"An error occured during request: {e}")
         
         output = BeautifulSoup(response.text, "html.parser")
-        
+        table = output.find_all("table", class_="data1") # Getting table from webpage
+
+        table_header = output.find_all("th") # Getting table headings only
+        col_names = list()
+        for header in table_header: # Adding table headers to col_names list
+            col_names.append(header.text)
+
+        info = output.find_all("tr")[1:] # Getting all rows of table without header row
+
+        table_data_info = list()
+        for data in info: # Adding row data to dictionaries in a list
+            data = data.text.split('\n')
+            table_data_info.append({
+                col_names[0]: data[1],
+                col_names[1]: data[2],
+                col_names[2]: data[3],
+                col_names[3]: data[4],
+                col_names[4]: data[5],
+                col_names[5]: data[6],
+                col_names[6]: data[7],
+                col_names[7]: data[8],       
+            })
+
+        df = pd.DataFrame(data=table_data_info, columns=col_names) # Creating a DataFrame with information gathered
+        return df

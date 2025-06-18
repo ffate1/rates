@@ -33,5 +33,3 @@ class USTs:
         otr_df['auction_date'] = pd.to_datetime(otr_df['auction_date'])
         otr_df['avg_med_yield'] = pd.to_numeric(otr_df['avg_med_yield'], errors='coerce')              
         return otr_df
-    
-    def get_
