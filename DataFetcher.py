@@ -53,16 +53,18 @@ class DataFetcher:
         Fetches UST data from FedInvest
         
         Args:
-        date (str): Date for pricing to be retrieved in "YYYY-MM-DD" format
+            date (str): Date for pricing to be retrieved in "YYYY-MM-DD" format
         
         Returns:
-        DataFrame: Values from website
+            DataFrame: Values from website
         """
+        # Cleaning input
         try:
             datetime_object = datetime.strptime(date, "%Y-%m-%d")
         except ValueError:
             print(f"The format for {date} is incorrect, please use 'YYYY-MM-DD' format.")
 
+        # 
         payload = {
             "priceDate.month": datetime_object.month,
             "priceDate.day": datetime_object.day,
@@ -78,28 +80,16 @@ class DataFetcher:
             print(f"An error occured during request: {e}")
         
         output = BeautifulSoup(response.text, "html.parser")
-        table = output.find_all("table", class_="data1") # Getting table from webpage
+        table = output.find("table", class_="data1") # Getting table from webpage
 
-        table_header = output.find_all("th") # Getting table headings only
-        col_names = list()
-        for header in table_header: # Adding table headers to col_names list
-            col_names.append(header.text)
+        header_row = table.find_all("th")
+        headers = [th.get_text(strip=True) for th in header_row]
 
-        info = output.find_all("tr")[1:] # Getting all rows of table without header row
+        data_rows = table.find_all("tr")[1:]
+        all_rows = list()
+        for tr in data_rows:
+            row_data = [td.get_text(strip=True) for td in tr.find_all("td")]
+            all_rows.append(row_data)
 
-        table_data_info = list()
-        for data in info: # Adding row data to dictionaries in a list
-            data = data.text.split('\n')
-            table_data_info.append({
-                col_names[0]: data[1],
-                col_names[1]: data[2],
-                col_names[2]: data[3],
-                col_names[3]: data[4],
-                col_names[4]: data[5],
-                col_names[5]: data[6],
-                col_names[6]: data[7],
-                col_names[7]: data[8],       
-            })
-
-        df = pd.DataFrame(data=table_data_info, columns=col_names) # Creating a DataFrame with information gathered
+        df = pd.DataFrame(data=all_rows, columns=headers)
         return df
