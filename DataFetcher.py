@@ -83,7 +83,7 @@ class DataFetcher:
         table = output.find("table", class_="data1") # Getting table from webpage
 
         header_row = table.find_all("th")
-        headers = [th.get_text(strip=True) for th in header_row]
+        headers = [th.get_text(strip=True).capitalize() for th in header_row]
 
         data_rows = table.find_all("tr")[1:]
         all_rows = list()
@@ -92,4 +92,14 @@ class DataFetcher:
             all_rows.append(row_data)
 
         df = pd.DataFrame(data=all_rows, columns=headers)
+
+        column_name = headers[1] 
+        df.loc[df[column_name] == "MARKET BASED BILL", column_name] = "Bill" # Cleaning up naming
+        df.loc[df[column_name] == "MARKET BASED NOTE", column_name] = "Note"
+        df.loc[df[column_name] == "MARKET BASED BOND", column_name] = "Bond"
+        df.loc[df[column_name] == "MARKET BASED FRN", column_name] = "FRN"
+        df = df.drop(columns=[headers[4], headers[-1]]) # Dropping "Call date" and "End of day" columns which are empty
+        df['Maturity date'] = pd.to_datetime(df['Maturity date'], errors='coerce')
+        df['Buy'] = pd.to_numeric(df['Buy'])
+        df['Sell'] = pd.to_numeric(df['Sell'])
         return df
