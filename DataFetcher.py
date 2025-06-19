@@ -106,4 +106,7 @@ class DataFetcher:
         df['Buy'] = pd.to_numeric(df['Buy'])
         df['Sell'] = pd.to_numeric(df['Sell'])
         df['End of day'] = pd.to_numeric(df['End of day'])
+        # Need to make string types and change Rate to percentage
+        
         return df
+    
