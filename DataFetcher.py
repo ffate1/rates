@@ -101,8 +101,9 @@ class DataFetcher:
         df.loc[df[column_name] == "MARKET BASED NOTE", column_name] = "Note"
         df.loc[df[column_name] == "MARKET BASED BOND", column_name] = "Bond"
         df.loc[df[column_name] == "MARKET BASED FRN", column_name] = "FRN"
-        df = df.drop(columns=[headers[4], headers[-1]]) # Dropping "Call date" and "End of day" columns which are empty
+        df = df.drop(columns=headers[4]) # Dropping "Call date" column which is empty
         df['Maturity date'] = pd.to_datetime(df['Maturity date'], errors='coerce')
         df['Buy'] = pd.to_numeric(df['Buy'])
         df['Sell'] = pd.to_numeric(df['Sell'])
+        df['End of day'] = pd.to_numeric(df['End of day'])
         return df
