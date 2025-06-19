@@ -64,7 +64,9 @@ class DataFetcher:
         except ValueError:
             print(f"The format for {date} is incorrect, please use 'YYYY-MM-DD' format.")
 
-        if 
+        while datetime_object.weekday() in [5, 6]:
+            datetime_object = datetime_object - timedelta(days=1)
+
         # Posting to FedInvest to retrieve data
         payload = {
             "priceDate.month": datetime_object.month,
