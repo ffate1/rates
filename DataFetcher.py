@@ -2,7 +2,7 @@ import requests
 import pandas as pd
 import numpy as np
 from typing import List, Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 from bs4 import BeautifulSoup
 
 class DataFetcher:
@@ -13,7 +13,7 @@ class DataFetcher:
         
 
     def fetch_auction_data(self,
-                           fields : Optional[List[str]] = ["cusip", "auction_date", "issue_date", "security_term", "maturity_date", "avg_med_yield", "currently_outstanding", "original_security_term"]):
+                           fields: Optional[List[str]] = ["cusip", "auction_date", "issue_date", "security_term", "maturity_date", "avg_med_yield", "currently_outstanding", "original_security_term"]):
         # Fetching all historical Treasury auction data
         
         params = {
@@ -48,12 +48,12 @@ class DataFetcher:
             print(f"Error fetching auction data: {e}")
             return None
         
-    def fetch_historical_UST_data(self, date: str = "2025-02-05"):
+    def fetch_historical_UST_data(self, date: Optional[str] = (datetime.now().date() - timedelta(days=1)).strftime(format="%Y-%m-%d")):
         """
         Fetches UST data from FedInvest
         
         Args:
-            date (str): Date for pricing to be retrieved in "YYYY-MM-DD" format
+            date (str): Date for pricing to be input in "YYYY-MM-DD" format
         
         Returns:
             DataFrame: Values from website
@@ -64,7 +64,8 @@ class DataFetcher:
         except ValueError:
             print(f"The format for {date} is incorrect, please use 'YYYY-MM-DD' format.")
 
-        # 
+        if 
+        # Posting to FedInvest to retrieve data
         payload = {
             "priceDate.month": datetime_object.month,
             "priceDate.day": datetime_object.day,
