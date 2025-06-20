@@ -18,7 +18,7 @@ class DataFetcher:
         
         params = {
             "sort": "-auction_date",
-            "format": "json"  # Adjust limit as needed
+            "format": "json"
         }
 
         if fields:
@@ -48,7 +48,7 @@ class DataFetcher:
             print(f"Error fetching auction data: {e}")
             return None
         
-    def fetch_historical_UST_data(self, date: Optional[str] = (datetime.now().date() - timedelta(days=1)).strftime(format="%Y-%m-%d")):
+    def fetch_historical_UST_data(self, date: Optional[datetime]):
         """
         Fetches UST data from FedInvest
         
@@ -59,10 +59,10 @@ class DataFetcher:
             DataFrame: Values from website
         """
         # Cleaning input
-        try:
-            datetime_object = datetime.strptime(date, "%Y-%m-%d")
-        except ValueError:
-            print(f"The format for {date} is incorrect, please use 'YYYY-MM-DD' format.")
+        if date:
+            datetime_object = date
+        else:
+            datetime_object = datetime.now().date() - timedelta(days=1) 
 
         while datetime_object.weekday() in [5, 6]:
             datetime_object = datetime_object - timedelta(days=1)
@@ -106,6 +106,7 @@ class DataFetcher:
         df.loc[df[column_name] == "MARKET BASED BOND", column_name] = "Bond"
         df.loc[df[column_name] == "MARKET BASED FRN", column_name] = "FRN"
         df = df.drop(columns=headers[4]) # Dropping "Call date" column which is empty
+        df['Rate'] = pd.to_numeric(df['Rate'].str.rstrip('%'))
         df['Maturity date'] = pd.to_datetime(df['Maturity date'], errors='coerce')
         df['Buy'] = pd.to_numeric(df['Buy'])
         df['Sell'] = pd.to_numeric(df['Sell'])
