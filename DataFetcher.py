@@ -83,12 +83,16 @@ class DataFetcher:
             print(f"An error occured during request: {e}")
         
         output = BeautifulSoup(response.text, "html.parser")
-        table = output.find("table", class_="data1") # Getting table from webpage
-
+        table = output.find("table", class_="data1") # Getting table and its data from webpage
         header_row = table.find_all("th")
-        headers = [th.get_text(strip=True).capitalize() for th in header_row]
-
         data_rows = table.find_all("tr")[1:]
+
+        if not data_rows:
+            print("No price information on this date")
+            return None
+
+        headers = [th.get_text(strip=True).capitalize() for th in header_row]
+        
         all_rows = list()
         for tr in data_rows:
             row_data = [td.get_text(strip=True) for td in tr.find_all("td")]
