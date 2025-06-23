@@ -1,8 +1,10 @@
-from DataFetcher import DataFetcher
 import pandas as pd
-from typing import Optional
-import datetime
 import numpy as np
+from typing import Optional, List
+import datetime
+from datetime import timedelta
+from dateutil.relativedelta import relativedelta
+import calendar
 
 class USTs:
     def __init__(self,
@@ -73,28 +75,38 @@ class USTs:
                      issue_date: datetime.date,
                      maturity_date: datetime.date,
                      face_value: int = 100,
-                     pricing_date: datetime.date = datetime.now().date()):
+                     pricing_date: datetime.date = datetime.datetime.now().date()):
         pass
 
-    def _create_date_set(self, issue_date, maturity_date) -> list(datetime.date()):
-        DAY = 15
+    def _create_date_set(self, issue_date, maturity_date) -> List[datetime.date]: # type: ignore
         tenor = maturity_date.year - issue_date.year
         coupons = tenor * 2
-        today = datetime.now().date()
+        today = datetime.datetime.now().date()
         payment_set = []
-        if issue_date.month + 6 > 12:
-            coupon_months = [issue_date.month - 6, issue_date.month]
-            while len(payment_set) < coupons:
-                for year in range(issue_date.year + 1, maturity_date.year + 1):
-                    for month in coupon_months:
-                        payment_set.append(datetime(year, month, DAY).date())
-        else:
-            coupon_months = [issue_date.month + 6, issue_date.month]
-            payment_set.append(datetime(issue_date.year, coupon_months[0], DAY).date())
-            for year in range(issue_date.year + 1, maturity_date.year + 1):
-                for month in reversed(coupon_months):
-                    if len(payment_set) < 20:
-                        payment_set.append(datetime(year, month, DAY).date())
+        if tenor in [3, 10, 20, 30]:
+            DAY = 15
+            first_payment = issue_date + relativedelta(months=6)
+            date = datetime.date(first_payment.year, first_payment.month, DAY)
+            payment_set.append(date)
+            while len(payment_set) < coupons - 1:
+                date = date + relativedelta(months=6)
+                date = datetime.date(date.year, date.month, DAY)
+                while date.weekday() in [5, 6]:
+                    date = date + timedelta(days=1)
+                payment_set.append(date)
+        
+        if tenor in [2, 5, 7]:
+            month = min(issue_date.month, maturity_date.month)
+            _, day = calendar.monthrange(issue_date.year, month)
+            date = datetime.date(issue_date.year, month, day) + relativedelta(months=6)
+            payment_set.append(date)
+            while len(payment_set) < coupons - 1:
+                date = date + relativedelta(months=6)
+                while date.weekday() in [5, 6]:
+                    date = date + timedelta(days=1)
+                payment_set.append(date)
+
+        payment_set.append(maturity_date)
         if len(payment_set) == coupons:
             print(f"{coupons} coupons dates in set, matching the expected number.")
             return payment_set
