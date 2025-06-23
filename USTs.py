@@ -78,38 +78,23 @@ class USTs:
                      pricing_date: datetime.date = datetime.datetime.now().date()):
         pass
 
-    def _create_date_set(self, issue_date, maturity_date) -> List[datetime.date]: # type: ignore
-        tenor = maturity_date.year - issue_date.year
-        coupons = tenor * 2
-        today = datetime.datetime.now().date()
-        payment_set = []
-        if tenor in [3, 10, 20, 30]:
-            DAY = 15
-            first_payment = issue_date + relativedelta(months=6)
-            date = datetime.date(first_payment.year, first_payment.month, DAY)
-            payment_set.append(date)
-            while len(payment_set) < coupons - 1:
-                date = date + relativedelta(months=6)
-                date = datetime.date(date.year, date.month, DAY)
-                while date.weekday() in [5, 6]:
-                    date = date + timedelta(days=1)
-                payment_set.append(date)
-        
-        if tenor in [2, 5, 7]:
-            month = min(issue_date.month, maturity_date.month)
-            _, day = calendar.monthrange(issue_date.year, month)
-            date = datetime.date(issue_date.year, month, day) + relativedelta(months=6)
-            payment_set.append(date)
-            while len(payment_set) < coupons - 1:
-                date = date + relativedelta(months=6)
-                while date.weekday() in [5, 6]:
-                    date = date + timedelta(days=1)
-                payment_set.append(date)
+    def _adjust_for_weekend(self, date: datetime.date) -> datetime.date: # type: ignore
+        if date.weekday() in [5, 6]:
+            date = date + timedelta(days=(7 - date.weekday()))
+        return date
 
+    def _get_coupon_dates(self, issue_date, maturity_date) -> List[datetime.date]: # type: ignore
+        payment_set = []
         payment_set.append(maturity_date)
-        if len(payment_set) == coupons:
-            print(f"{coupons} coupons dates in set, matching the expected number.")
-            return payment_set
+        current_date = maturity_date
+
+        while current_date > issue_date:
+            current_date = maturity_date - relativedelta(months=len(payment_set) * 6)
+            current_date = self.adjust_for_weekend(current_date)
+            if current_date > issue_date:
+                payment_set.append(current_date)
+        payment_set.sort()
+        return payment_set
         
     def get_nth_OTRs(self, n: int) -> pd.DataFrame:
         data = self.auction_data[["cusip", "auction_date", "security_term", "avg_med_yield", "maturity_date"]].copy()
