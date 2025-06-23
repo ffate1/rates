@@ -14,7 +14,7 @@ class USTs:
         self.auction_data = auction_data
         self.price_data = price_data
 
-    def get_current_UST_set(self):
+    def get_current_UST_set(self, include_FRNs: bool = False, include_TIPS: bool = False):
         # Checking all necessary data is provided
         auction_check = (self.auction_data is None or self.auction_data.empty )
         price_check = (self.price_data is None or self.price_data.empty)
@@ -31,6 +31,10 @@ class USTs:
         ust_set['issue_date'] = pd.to_datetime(ust_set['issue_date'])
 
         if len(ust_set) == len(prices):
+            if not include_FRNs:
+                ust_set = ust_set[ust_set['Security type'] != 'FRN']
+            if not include_TIPS:
+                ust_set = ust_set[ust_set['Security type'] != 'TIPS']
             if bool((ust_set['Cusip'] == ust_set['cusip']).all()):
                 print("Merged auction and price data successfully\nNo missing or excess data\nAll CUSIPs are identical between DataFrames")
                 ust_set = ust_set.drop(columns='cusip')
@@ -40,6 +44,7 @@ class USTs:
                 return None
         else:
             print("Length of DataFrames differs - verify data")
+            print(len(ust_set), len(prices))
             return None        
 
     def get_bill_discount_rate(self, price: float, issue_date: datetime.date, maturity_date: datetime.date) -> float:
