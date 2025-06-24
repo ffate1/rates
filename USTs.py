@@ -4,7 +4,7 @@ from typing import Optional, List
 import datetime
 from datetime import timedelta
 from dateutil.relativedelta import relativedelta
-import calendar
+from scipy.optimize import newton
 
 class USTs:
     def __init__(self,
@@ -14,12 +14,17 @@ class USTs:
         self.auction_data = auction_data
         self.price_data = price_data
 
-    def get_current_UST_set(self, include_FRNs: bool = False, include_TIPS: bool = False):
+    def get_current_UST_set(self,
+                            as_of_date: Optional[datetime.date],
+                            get_ytms: bool = True, 
+                            include_FRNs: bool = False,
+                            include_TIPS: bool = False):
         # Checking all necessary data is provided
         auction_check = (self.auction_data is None or self.auction_data.empty )
         price_check = (self.price_data is None or self.price_data.empty)
         if auction_check or price_check:
             print("Cannot produce UST set due to missing data")
+            return None
         
         auctions = self.auction_data
         auctions = auctions[auctions['security_term'] == auctions['original_security_term']]
@@ -35,6 +40,19 @@ class USTs:
                 ust_set = ust_set[ust_set['Security type'] != 'FRN']
             if not include_TIPS:
                 ust_set = ust_set[ust_set['Security type'] != 'TIPS']
+            if get_ytms:
+                for row in range(len(ust_set)):
+                    if ust_set.loc[row, 'Security type'] == 'Bill':
+                        ust_set.loc[row, 'YTM'] = self.get_bill_BEYTM(price=ust_set.loc[row, 'End of day'],
+                                                                      issue_date=ust_set.loc[row, 'issue_date'].date(),
+                                                                      maturity_date=ust_set.loc[row, 'Maturity date'].date())
+                    elif ust_set.loc[row, 'Security type'] in ['Note', 'Bond']:
+                        ust_set.loc[row, 'YTM'] = self.get_coupon_ytm(price=ust_set.loc[row, 'End of day'],
+                                                                      issue_date=ust_set.loc[row, 'issue_date'].date(),
+                                                                      maturity_date=ust_set.loc[row, 'Maturity date'].date(),
+                                                                      as_of_date=as_of_date,
+                                                                      coupon=ust_set.loc[row, 'Rate'],
+                                                                      dirty=False)
             if bool((ust_set['Cusip'] == ust_set['cusip']).all()):
                 print("Merged auction and price data successfully\nNo missing or excess data\nAll CUSIPs are identical between DataFrames")
                 ust_set = ust_set.drop(columns='cusip')
@@ -46,7 +64,7 @@ class USTs:
             print("Length of DataFrames differs - verify data")
             print(len(ust_set), len(prices))
             return None        
-
+        
     def get_bill_discount_rate(self, price: float, issue_date: datetime.date, maturity_date: datetime.date) -> float:
         """Returns simple discount rate using ACT/360 convention"""
         time = (maturity_date - issue_date).days
@@ -74,21 +92,12 @@ class USTs:
                 print(f"A: {a}\nB: {b}\nC: {c}")
             return float(round(bond_equivalent_ytm * 100, 3))
         
-    def get_bond_ytm(self,
-                     price: float,
-                     coupon: float,
-                     issue_date: datetime.date,
-                     maturity_date: datetime.date,
-                     face_value: int = 100,
-                     pricing_date: datetime.date = datetime.datetime.now().date()):
-        pass
-
-    def _adjust_for_weekend(self, date: datetime.date) -> datetime.date: # type: ignore
+    def adjust_for_weekend(self, date: datetime.date) -> datetime.date: # type: ignore
         if date.weekday() in [5, 6]:
             date = date + timedelta(days=(7 - date.weekday()))
         return date
 
-    def _get_coupon_dates(self, issue_date, maturity_date) -> List[datetime.date]: # type: ignore
+    def get_coupon_dates(self, issue_date, maturity_date) -> List[datetime.date]: # type: ignore
         payment_set = []
         payment_set.append(maturity_date)
         current_date = maturity_date
@@ -100,6 +109,107 @@ class USTs:
                 payment_set.append(current_date)
         payment_set.sort()
         return payment_set
+
+    def get_dates_and_cashflows(self, issue_date: datetime.date, maturity_date: datetime.date, as_of_date: datetime.date, coupon: float, get_days: bool = True, FV: int = 100):
+        dates = self.get_coupon_dates(issue_date, maturity_date)
+        coupon_amt = coupon / 2
+        return_list = list()
+        if get_days:
+            days = [(date - as_of_date).days for date in dates]
+            for day in days[:-1]:
+                return_list.append((day, coupon_amt))
+            return_list.append((days[-1], coupon_amt + FV))
+        else:
+            for date in dates[:-1]:
+                return_list.append((date, coupon_amt))
+            return_list.append((dates[-1], coupon_amt + FV))
+        return return_list
+
+    # Calculating bond price
+    def get_next_coupon_days(self, days_and_cashflows) -> int:
+        for days, cfs in days_and_cashflows:
+            if days > 0:
+                day = days
+                return day
+
+    def get_last_coupon_days(self, days_and_cashflows, issue_date) -> int:
+        current_day = -100000
+        for day, cfs in days_and_cashflows:
+            if day < 0:
+                if day > current_day:
+                    current_day = day
+        if current_day == -100000:
+            current_day = (issue_date - datetime.datetime.now().date()).days
+        return current_day
+
+    def get_accrued(self, days_and_cashflows, coupon, issue_date) -> float:
+        next_payment = self.get_next_coupon_days(days_and_cashflows=days_and_cashflows)
+        last_payment = self.get_last_coupon_days(days_and_cashflows=days_and_cashflows, issue_date=issue_date)
+        accrued = coupon / 2 * abs(last_payment) / (next_payment - last_payment)
+        return accrued
+
+    def calculate_bond_price(self,
+                             issue_date: datetime.date,
+                             maturity_date: datetime.date,
+                             as_of_date: datetime.date,
+                             coupon: float,
+                             discount_rate: float,
+                             dirty: bool = False) -> float:
+        
+        days_and_cashflows = self.get_dates_and_cashflows(issue_date=issue_date,
+                                                          maturity_date=maturity_date,
+                                                          as_of_date=as_of_date,
+                                                          coupon=coupon,
+                                                          get_days=True,
+                                                          FV=100)
+        # Dirty price
+        PV = 0
+        DISCOUNT_RATE = discount_rate / 100
+        for day, cashflow in days_and_cashflows:
+            if day > 0:
+                pmt_value = cashflow/((1 + DISCOUNT_RATE)**(day/182.75))
+                PV += pmt_value
+        
+        if not dirty:
+            accrued = self.get_accrued(days_and_cashflows=days_and_cashflows, coupon=coupon, issue_date=issue_date)
+            PV -= accrued
+        return PV
+    def error_function(self,
+                       discount_rate: float,
+                       price: float,
+                       issue_date: datetime.date,
+                       maturity_date: datetime.date,
+                       as_of_date: datetime.date,
+                       coupon: float,
+                       dirty: bool=False):
+        calculated_price = self.calculate_bond_price(issue_date=issue_date,
+                                                     maturity_date=maturity_date,
+                                                     discount_rate=discount_rate,
+                                                     coupon=coupon,
+                                                     as_of_date=as_of_date,
+                                                     dirty=dirty)
+        error = price - calculated_price
+        return error
+
+
+    def get_coupon_ytm(self,
+                price: float, 
+                issue_date: datetime.date,
+                maturity_date: datetime.date,
+                as_of_date: datetime.date,
+                coupon: float,
+                dirty: bool=False):
+        guess = coupon / 2 / 100
+
+        try:
+            ytm = newton(
+                func=self.error_function,
+                x0=guess,
+                args=(price, issue_date, maturity_date, as_of_date, coupon, dirty)
+            )
+            return round(float(ytm * 2), 6)
+        except RuntimeError:
+            return None
         
     def get_nth_OTRs(self, n: int) -> pd.DataFrame:
         data = self.auction_data[["cusip", "auction_date", "security_term", "avg_med_yield", "maturity_date"]].copy()
