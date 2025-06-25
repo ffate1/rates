@@ -137,19 +137,21 @@ class USTs:
                 day = days
                 return day
 
-    def get_last_coupon_days(self, days_and_cashflows, issue_date) -> int:
+    def get_last_coupon_days(self, days_and_cashflows, issue_date, as_of_date) -> int:
         current_day = -100000
         for day, cfs in days_and_cashflows:
             if day < 0:
                 if day > current_day:
                     current_day = day
         if current_day == -100000:
-            current_day = (issue_date - datetime.datetime.now().date()).days
+            current_day = (issue_date - as_of_date).days
         return current_day
 
-    def get_accrued(self, days_and_cashflows, coupon, issue_date) -> float:
+    def get_accrued(self, days_and_cashflows, coupon, issue_date, as_of_date) -> float:
         next_payment = self.get_next_coupon_days(days_and_cashflows=days_and_cashflows)
-        last_payment = self.get_last_coupon_days(days_and_cashflows=days_and_cashflows, issue_date=issue_date)
+        last_payment = self.get_last_coupon_days(days_and_cashflows=days_and_cashflows,
+                                                 issue_date=issue_date,
+                                                 as_of_date=as_of_date)
         accrued = coupon / 2 * abs(last_payment) / (next_payment - last_payment)
         return accrued
 
@@ -176,7 +178,10 @@ class USTs:
                 PV += pmt_value
         
         if not dirty:
-            accrued = self.get_accrued(days_and_cashflows=days_and_cashflows, coupon=coupon, issue_date=issue_date)
+            accrued = self.get_accrued(days_and_cashflows=days_and_cashflows,
+                                       coupon=coupon,
+                                       issue_date=issue_date,
+                                       as_of_date=as_of_date)
             PV -= accrued
         return PV
     
