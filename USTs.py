@@ -5,6 +5,7 @@ import datetime
 from datetime import timedelta
 from dateutil.relativedelta import relativedelta
 from scipy.optimize import newton
+import pandas_market_calendars as mcal
 
 class USTs:
     def __init__(self,
@@ -13,6 +14,11 @@ class USTs:
 
         self.auction_data = auction_data
         self.price_data = price_data
+        
+        holiday_array = mcal.get_calendar('NYSE').holidays().holidays
+        start, end = datetime.date(1990, 1, 1), datetime.date(2060, 1, 1)
+        holidays_list = [pd.to_datetime(np_date).date() for np_date in holiday_array]
+        self.holidays = [holiday for holiday in holidays_list if start < holiday < end]
 
     def get_current_UST_set(self,
                             as_of_date: Optional[datetime.date],
@@ -43,11 +49,11 @@ class USTs:
             if get_ytms:
                 for row in range(len(ust_set)):
                     if ust_set.loc[row, 'Security type'] == 'Bill':
-                        ust_set.loc[row, 'YTM'] = self.get_bill_BEYTM(price=ust_set.loc[row, 'End of day'],
+                        ust_set.loc[row, 'EOD YTM'] = self.get_bill_BEYTM(price=ust_set.loc[row, 'End of day'],
                                                                       issue_date=ust_set.loc[row, 'issue_date'].date(),
                                                                       maturity_date=ust_set.loc[row, 'Maturity date'].date())
                     elif ust_set.loc[row, 'Security type'] in ['Note', 'Bond']:
-                        ust_set.loc[row, 'YTM'] = self.get_coupon_ytm(price=ust_set.loc[row, 'End of day'],
+                        ust_set.loc[row, 'EOD YTM'] = self.get_coupon_ytm(price=ust_set.loc[row, 'End of day'],
                                                                       issue_date=ust_set.loc[row, 'issue_date'].date(),
                                                                       maturity_date=ust_set.loc[row, 'Maturity date'].date(),
                                                                       as_of_date=as_of_date,
@@ -91,10 +97,10 @@ class USTs:
             if print_steps:
                 print(f"A: {a}\nB: {b}\nC: {c}")
             return float(round(bond_equivalent_ytm * 100, 3))
-        
-    def adjust_for_weekend(self, date: datetime.date) -> datetime.date: # type: ignore
-        if date.weekday() in [5, 6]:
-            date = date + timedelta(days=(7 - date.weekday()))
+    
+    def adjust_for_bad_day(self, date: datetime.date) -> datetime.date: # type: ignore
+        while date.weekday() in [5, 6] or date in self.holidays:
+            date = date + timedelta(days=1)
         return date
 
     def get_coupon_dates(self, issue_date, maturity_date) -> List[datetime.date]: # type: ignore
@@ -104,7 +110,7 @@ class USTs:
 
         while current_date > issue_date:
             current_date = maturity_date - relativedelta(months=len(payment_set) * 6)
-            current_date = self.adjust_for_weekend(current_date)
+            current_date = self.adjust_for_bad_day(current_date)
             if current_date > issue_date:
                 payment_set.append(current_date)
         payment_set.sort()
@@ -125,7 +131,6 @@ class USTs:
             return_list.append((dates[-1], coupon_amt + FV))
         return return_list
 
-    # Calculating bond price
     def get_next_coupon_days(self, days_and_cashflows) -> int:
         for days, cfs in days_and_cashflows:
             if days > 0:
@@ -167,13 +172,14 @@ class USTs:
         DISCOUNT_RATE = discount_rate / 100
         for day, cashflow in days_and_cashflows:
             if day > 0:
-                pmt_value = cashflow/((1 + DISCOUNT_RATE)**(day/182.75))
+                pmt_value = cashflow/((1 + DISCOUNT_RATE)**(day / (365.25 / 2)))
                 PV += pmt_value
         
         if not dirty:
             accrued = self.get_accrued(days_and_cashflows=days_and_cashflows, coupon=coupon, issue_date=issue_date)
             PV -= accrued
         return PV
+    
     def error_function(self,
                        discount_rate: float,
                        price: float,
@@ -190,7 +196,6 @@ class USTs:
                                                      dirty=dirty)
         error = price - calculated_price
         return error
-
 
     def get_coupon_ytm(self,
                 price: float, 
