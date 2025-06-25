@@ -182,6 +182,7 @@ class USTs:
                                        coupon=coupon,
                                        issue_date=issue_date,
                                        as_of_date=as_of_date)
+            print(accrued)
             PV -= accrued
         return PV
     
