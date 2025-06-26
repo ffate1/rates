@@ -103,56 +103,41 @@ class USTs:
             date = date + timedelta(days=1)
         return date
 
-    def get_coupon_dates(self, issue_date, maturity_date) -> List[datetime.date]: # type: ignore
-        payment_set = []
-        payment_set.append(maturity_date)
+    def get_dates_and_cashflows(self,
+                                issue_date: datetime.date,
+                                maturity_date: datetime.date,
+                                coupon: float,
+                                FV: int = 100):
+        payment_dates = [maturity_date]
         current_date = maturity_date
-
         while current_date > issue_date:
-            current_date = maturity_date - relativedelta(months=len(payment_set) * 6)
-            current_date = self.adjust_for_bad_day(current_date)
+            current_date = maturity_date - relativedelta(months=len(payment_dates) * 6)
             if current_date > issue_date:
-                payment_set.append(current_date)
-        payment_set.sort()
-        return payment_set
-
-    def get_dates_and_cashflows(self, issue_date: datetime.date, maturity_date: datetime.date, as_of_date: datetime.date, coupon: float, get_days: bool = True, FV: int = 100):
-        dates = self.get_coupon_dates(issue_date, maturity_date)
+                payment_dates.append(current_date)
+        payment_dates = sorted(payment_dates)
+        
         coupon_amt = coupon / 2
-        return_list = list()
-        if get_days:
-            days = [(date - as_of_date).days for date in dates]
-            for day in days[:-1]:
-                return_list.append((day, coupon_amt))
-            return_list.append((days[-1], coupon_amt + FV))
-        else:
-            for date in dates[:-1]:
-                return_list.append((date, coupon_amt))
-            return_list.append((dates[-1], coupon_amt + FV))
+        return_list = [(issue_date, 0.0)] # Issue date
+        for date in payment_dates[:-1]:
+            return_list.append((date, coupon_amt))
+        return_list.append((payment_dates[-1], coupon_amt + FV)) # Maturity with principal repayment
         return return_list
 
-    def get_next_coupon_days(self, days_and_cashflows) -> int:
-        for days, cfs in days_and_cashflows:
-            if days > 0:
-                day = days
-                return day
+    def calculate_accrued_interest(self, dates_and_cashflows, as_of_date) -> float:
+        for date, _ in dates_and_cashflows:
+            if date > as_of_date:
+                next_coupon_date = date
+                previous_index = dates_and_cashflows.index((date, _)) - 1
+                last_date = dates_and_cashflows[previous_index][0]
+                break
 
-    def get_last_coupon_days(self, days_and_cashflows, issue_date, as_of_date) -> int:
-        current_day = -100000
-        for day, cfs in days_and_cashflows:
-            if day < 0:
-                if day > current_day:
-                    current_day = day
-        if current_day == -100000:
-            current_day = (issue_date - as_of_date).days
-        return current_day
+        days_in_period = (next_coupon_date - last_date).days
+        days_accrued = (as_of_date - last_date).days
+        if days_in_period == 0:
+            return 0.0
 
-    def get_accrued(self, days_and_cashflows, coupon, issue_date, as_of_date) -> float:
-        next_payment = self.get_next_coupon_days(days_and_cashflows=days_and_cashflows)
-        last_payment = self.get_last_coupon_days(days_and_cashflows=days_and_cashflows,
-                                                 issue_date=issue_date,
-                                                 as_of_date=as_of_date)
-        accrued = coupon / 2 * abs(last_payment) / (next_payment - last_payment)
+        coupon_amt = dates_and_cashflows[1][1]
+        accrued = coupon_amt * days_accrued / days_in_period
         return accrued
 
     def calculate_bond_price(self,
@@ -161,31 +146,41 @@ class USTs:
                              as_of_date: datetime.date,
                              coupon: float,
                              discount_rate: float,
-                             dirty: bool = False) -> float:
+                             dirty: bool = False
+                             ) -> float:
         
-        days_and_cashflows = self.get_dates_and_cashflows(issue_date=issue_date,
-                                                          maturity_date=maturity_date,
-                                                          as_of_date=as_of_date,
-                                                          coupon=coupon,
-                                                          get_days=True,
-                                                          FV=100)
-        # Dirty price
+        dates_and_cashflows = self.get_dates_and_cashflows(issue_date=issue_date,
+                                                        maturity_date=maturity_date,
+                                                        coupon=coupon)
+        for date, _ in dates_and_cashflows:
+            if date > as_of_date:
+                first_pmt_date = self.adjust_for_bad_day(date)
+                previous_index = dates_and_cashflows.index((date, _)) - 1
+                last_date = self.adjust_for_bad_day(dates_and_cashflows[previous_index][0])
+                first_pmt_period = (first_pmt_date - last_date).days
+                time_to_pmt = (first_pmt_date - as_of_date).days
+                break
+        first_period_fraction = time_to_pmt / first_pmt_period
+
         PV = 0
-        DISCOUNT_RATE = discount_rate / 100
-        for day, cashflow in days_and_cashflows:
-            if day > 0:
-                pmt_value = cashflow/((1 + DISCOUNT_RATE)**(day / (365.25 / 2)))
-                PV += pmt_value
-        
-        if not dirty:
-            accrued = self.get_accrued(days_and_cashflows=days_and_cashflows,
-                                       coupon=coupon,
-                                       issue_date=issue_date,
-                                       as_of_date=as_of_date)
-            print(accrued)
+        exponent = first_period_fraction
+        previous_date = None
+        for unadjusted_date, cashflow in dates_and_cashflows:
+            date = self.adjust_for_bad_day(unadjusted_date)
+            if date > as_of_date:
+                if previous_date:
+                    days_in_period = (date - previous_date).days
+                    exponent += (days_in_period / (365.25 / 2))
+                pmt_pv = cashflow / ((1 + discount_rate/2) ** exponent)
+                PV += pmt_pv
+                previous_date = date
+
+        if not dirty: # Clean price
+            accrued = self.calculate_accrued_interest(dates_and_cashflows=dates_and_cashflows,
+                                                as_of_date=as_of_date)
             PV -= accrued
         return PV
-    
+
     def error_function(self,
                        discount_rate: float,
                        price: float,
@@ -193,32 +188,34 @@ class USTs:
                        maturity_date: datetime.date,
                        as_of_date: datetime.date,
                        coupon: float,
-                       dirty: bool=False):
+                       dirty: bool=False
+                       ) -> float:
         calculated_price = self.calculate_bond_price(issue_date=issue_date,
-                                                     maturity_date=maturity_date,
-                                                     discount_rate=discount_rate,
-                                                     coupon=coupon,
-                                                     as_of_date=as_of_date,
-                                                     dirty=dirty)
+                                                maturity_date=maturity_date,
+                                                discount_rate=discount_rate,
+                                                coupon=coupon,
+                                                as_of_date=as_of_date,
+                                                dirty=dirty)
         error = price - calculated_price
         return error
 
-    def get_coupon_ytm(self,
-                price: float, 
-                issue_date: datetime.date,
-                maturity_date: datetime.date,
-                as_of_date: datetime.date,
-                coupon: float,
-                dirty: bool=False):
-        guess = coupon / 2 / 100
 
+    def get_coupon_ytm(self,
+                       price: float, 
+                       issue_date: datetime.date,
+                       maturity_date: datetime.date,
+                       as_of_date: datetime.date,
+                       coupon: float,
+                       dirty: bool=False
+                       ) -> float:
+        guess = coupon / 100
         try:
             ytm = newton(
                 func=self.error_function,
                 x0=guess,
                 args=(price, issue_date, maturity_date, as_of_date, coupon, dirty)
             )
-            return round(float(ytm * 2), 6)
+            return round(float(ytm * 100), 6)
         except RuntimeError:
             return None
         
