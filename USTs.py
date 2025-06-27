@@ -71,32 +71,39 @@ class USTs:
             print(len(ust_set), len(prices))
             return None        
         
-    def get_bill_discount_rate(self, price: float, issue_date: datetime.date, maturity_date: datetime.date) -> float:
-        """Returns simple discount rate using ACT/360 convention"""
-        time = (maturity_date - issue_date).days
+    def get_bill_discount_rate(self,
+                               price: float,
+                               maturity_date: datetime.date,
+                               settlement_date: datetime.date
+                               ) -> float:
+        """Returns  discount rate using ACT/360 convention"""
+        time = (maturity_date - settlement_date).days
         discount_rate = (100 - price)/100 * 360/time
-        return round(discount_rate * 100, 3)
+        return round(discount_rate * 100, 6)
 
-    def get_bill_BEYTM(self, price: float, issue_date: datetime.date, maturity_date: datetime.date, print_steps = False) -> float:
+    def get_bill_BEYTM(self,
+                       price: float,
+                       issue_date: datetime.date,
+                       maturity_date: datetime.date,
+                       settlement_date: datetime.date) -> float:
         """Following TreasuryDirect methodology to get bond-equivalent yields for maturities
         less than or greater than 6 months"""
-        time = (maturity_date - issue_date).days
-        if not (time < 366):
-            print(f"Days to expiry is: {time}. Ensure correct dates have been entered.")
+        tenor = (maturity_date - issue_date).days
+        time_to_maturity = (maturity_date - settlement_date).days
+        if not (tenor < 366):
+            print(f"Days to expiry is: {tenor}. Ensure correct dates have been entered.")
             return None
         
-        if time < 185:
-            bond_equivalent_ytm = (100-price)/100 * 365/time
+        if tenor < 184:
+            bond_equivalent_ytm = (100-price)/100 * 365/time_to_maturity
             return round(bond_equivalent_ytm * 100, 3)
         else:
-            a = (time/(2*365)) - 0.25
-            b = time/365
+            a = (time_to_maturity/(2*365)) - 0.25
+            b = time_to_maturity/365
             c = (price - 100)/price
 
             bond_equivalent_ytm = ((b*-1) + np.sqrt((b*b)-(4*a*c)))/(2*a)
-            if print_steps:
-                print(f"A: {a}\nB: {b}\nC: {c}")
-            return float(round(bond_equivalent_ytm * 100, 3))
+            return float(round(bond_equivalent_ytm * 100, 6))
     
     def adjust_for_bad_day(self, date: datetime.date) -> datetime.date: # type: ignore
         while date.weekday() in [5, 6] or date in self.holidays:
