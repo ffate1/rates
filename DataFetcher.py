@@ -13,11 +13,11 @@ class DataFetcher:
         
 
     def fetch_auction_data(self,
-                           fields: Optional[List[str]] = ["cusip", "auction_date", "issue_date", "security_term", "maturity_date", "avg_med_yield", "currently_outstanding", "original_security_term"]):
+                           fields: Optional[List[str]] = ["cusip", "auction_date", "issue_date", "security_term", "maturity_date", "currently_outstanding", "original_security_term"]):
         # Fetching all historical Treasury auction data
         
         params = {
-            "sort": "-auction_date",
+            "sort": "-issue_date",
             "format": "json"
         }
 
@@ -42,6 +42,14 @@ class DataFetcher:
                 if next_page_url is not None:
                     next_page_url.replace("%5B", "[").replace("%5D", "]")
             
+            date_cols = ['auction_date', 'issue_date', 'maturity_date']
+            for col in date_cols:
+                self.auction_data[col] = pd.to_datetime(self.auction_data[col], format='%Y-%m-%d')
+            self.auction_data['currently_outstanding'] = pd.to_numeric(self.auction_data['currently_outstanding'], errors='coerce')
+            col_names = []
+            for name in self.auction_data.columns:
+                col_names.append(name.replace('_', ' ').capitalize())
+            self.auction_data.columns = col_names
             return self.auction_data
         
         except requests.exceptions.RequestException as e:
@@ -111,7 +119,6 @@ class DataFetcher:
         df['Buy'] = pd.to_numeric(df['Buy'])
         df['Sell'] = pd.to_numeric(df['Sell'])
         df['End of day'] = pd.to_numeric(df['End of day'])
-        # Need to make string types and change Rate to percentage
         
         return df
     

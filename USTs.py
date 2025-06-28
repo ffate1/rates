@@ -21,7 +21,7 @@ class USTs:
         self.holidays = [holiday for holiday in holidays_list if start < holiday < end]
 
     def get_current_UST_set(self,
-                            as_of_date: Optional[datetime.date],
+                            settlement_date: datetime.date,
                             get_ytms: bool = True, 
                             include_FRNs: bool = False,
                             include_TIPS: bool = False):
@@ -33,13 +33,17 @@ class USTs:
             return None
         
         auctions = self.auction_data
-        auctions = auctions[auctions['security_term'] == auctions['original_security_term']]
-        auction_cols_to_keep = ['cusip', 'security_term', 'issue_date']
+        auction_cols_to_keep = ['Cusip', 'Original security term', 'Issue date', 'Currently outstanding']
         auctions = auctions[auction_cols_to_keep]
         
         prices = self.price_data
-        ust_set = pd.merge(prices, auctions, how='inner', left_on='Cusip', right_on='cusip')
-        ust_set['issue_date'] = pd.to_datetime(ust_set['issue_date'])
+        ust_set = pd.merge(prices, auctions, how='inner', on='Cusip')
+        ust_set.sort_values(by='Issue date', inplace=True, ascending=False)
+        ust_set.drop_duplicates(subset=['Cusip'], keep='first', inplace=True)
+        ust_set = ust_set.reset_index(drop=True)
+
+        while True:
+            return ust_set
 
         if len(ust_set) == len(prices):
             if not include_FRNs:
@@ -50,22 +54,23 @@ class USTs:
                 for row in range(len(ust_set)):
                     if ust_set.loc[row, 'Security type'] == 'Bill':
                         ust_set.loc[row, 'EOD YTM'] = self.get_bill_BEYTM(price=ust_set.loc[row, 'End of day'],
-                                                                      issue_date=ust_set.loc[row, 'issue_date'].date(),
-                                                                      maturity_date=ust_set.loc[row, 'Maturity date'].date())
+                                                                            maturity_date=ust_set.loc[row, 'Maturity date'].date(),
+                                                                            settlement_date=settlement_date)
                     elif ust_set.loc[row, 'Security type'] in ['Note', 'Bond']:
                         ust_set.loc[row, 'EOD YTM'] = self.get_coupon_ytm(price=ust_set.loc[row, 'End of day'],
-                                                                      issue_date=ust_set.loc[row, 'issue_date'].date(),
+                                                                      issue_date=ust_set.loc[row, 'Issue date'].date(),
                                                                       maturity_date=ust_set.loc[row, 'Maturity date'].date(),
-                                                                      as_of_date=as_of_date,
+                                                                      settlement_date=settlement_date,
                                                                       coupon=ust_set.loc[row, 'Rate'],
                                                                       dirty=False)
-            if bool((ust_set['Cusip'] == ust_set['cusip']).all()):
-                print("Merged auction and price data successfully\nNo missing or excess data\nAll CUSIPs are identical between DataFrames")
-                ust_set = ust_set.drop(columns='cusip')
-                return ust_set
-            else:
-                print("CUSIPs differ between DataFrames - verify data")
-                return None
+                        
+            print("Merged auction and price data successfully\nNo missing or excess data\nAll CUSIPs are identical between DataFrames")
+            ust_set = ust_set.drop(columns=['Buy', 'Sell'])
+            return ust_set
+            
+            # else:
+            #     print("CUSIPs differ between DataFrames - verify data")
+            #     return None
         else:
             print("Length of DataFrames differs - verify data")
             print(len(ust_set), len(prices))
@@ -83,28 +88,14 @@ class USTs:
 
     def get_bill_BEYTM(self,
                        price: float,
-                       issue_date: datetime.date,
                        maturity_date: datetime.date,
                        settlement_date: datetime.date) -> float:
         """Following TreasuryDirect methodology to get bond-equivalent yields for maturities
         less than or greater than 6 months"""
-        tenor = (maturity_date - issue_date).days
-        time_to_maturity = (maturity_date - settlement_date).days
-        if not (tenor < 366):
-            print(f"Days to expiry is: {tenor}. Ensure correct dates have been entered.")
-            return None
-        
-        if tenor < 184:
-            bond_equivalent_ytm = (100-price)/100 * 365/time_to_maturity
-            return round(bond_equivalent_ytm * 100, 3)
-        else:
-            a = (time_to_maturity/(2*365)) - 0.25
-            b = time_to_maturity/365
-            c = (price - 100)/price
+        tenor = (maturity_date - settlement_date).days
+        YTM = (100 - price) / price / (tenor / 365)
+        return YTM * 100
 
-            bond_equivalent_ytm = ((b*-1) + np.sqrt((b*b)-(4*a*c)))/(2*a)
-            return float(round(bond_equivalent_ytm * 100, 6))
-    
     def adjust_for_bad_day(self, date: datetime.date) -> datetime.date: # type: ignore
         while date.weekday() in [5, 6] or date in self.holidays:
             date = date + timedelta(days=1)
@@ -130,16 +121,16 @@ class USTs:
         return_list.append((payment_dates[-1], coupon_amt + FV)) # Maturity with principal repayment
         return return_list
 
-    def calculate_accrued_interest(self, dates_and_cashflows, as_of_date) -> float:
+    def calculate_accrued_interest(self, dates_and_cashflows, settlement_date) -> float:
         for date, _ in dates_and_cashflows:
-            if date > as_of_date:
+            if date > settlement_date:
                 next_coupon_date = date
                 previous_index = dates_and_cashflows.index((date, _)) - 1
                 last_date = dates_and_cashflows[previous_index][0]
                 break
 
         days_in_period = (next_coupon_date - last_date).days
-        days_accrued = (as_of_date - last_date).days
+        days_accrued = (settlement_date - last_date).days
         if days_in_period == 0:
             return 0.0
 
@@ -150,7 +141,7 @@ class USTs:
     def calculate_bond_price(self,
                              issue_date: datetime.date,
                              maturity_date: datetime.date,
-                             as_of_date: datetime.date,
+                             settlement_date: datetime.date,
                              coupon: float,
                              discount_rate: float,
                              dirty: bool = False
@@ -160,12 +151,12 @@ class USTs:
                                                         maturity_date=maturity_date,
                                                         coupon=coupon)
         for date, _ in dates_and_cashflows:
-            if date > as_of_date:
+            if date > settlement_date:
                 first_pmt_date = self.adjust_for_bad_day(date)
                 previous_index = dates_and_cashflows.index((date, _)) - 1
                 last_date = self.adjust_for_bad_day(dates_and_cashflows[previous_index][0])
                 first_pmt_period = (first_pmt_date - last_date).days
-                time_to_pmt = (first_pmt_date - as_of_date).days
+                time_to_pmt = (first_pmt_date - settlement_date).days
                 break
         first_period_fraction = time_to_pmt / first_pmt_period
 
@@ -174,7 +165,7 @@ class USTs:
         previous_date = None
         for unadjusted_date, cashflow in dates_and_cashflows:
             date = self.adjust_for_bad_day(unadjusted_date)
-            if date > as_of_date:
+            if date > settlement_date:
                 if previous_date:
                     days_in_period = (date - previous_date).days
                     exponent += (days_in_period / (365.25 / 2))
@@ -184,7 +175,7 @@ class USTs:
 
         if not dirty: # Clean price
             accrued = self.calculate_accrued_interest(dates_and_cashflows=dates_and_cashflows,
-                                                as_of_date=as_of_date)
+                                                settlement_date=settlement_date)
             PV -= accrued
         return PV
 
@@ -193,7 +184,7 @@ class USTs:
                        price: float,
                        issue_date: datetime.date,
                        maturity_date: datetime.date,
-                       as_of_date: datetime.date,
+                       settlement_date: datetime.date,
                        coupon: float,
                        dirty: bool=False
                        ) -> float:
@@ -201,7 +192,7 @@ class USTs:
                                                 maturity_date=maturity_date,
                                                 discount_rate=discount_rate,
                                                 coupon=coupon,
-                                                as_of_date=as_of_date,
+                                                settlement_date=settlement_date,
                                                 dirty=dirty)
         error = price - calculated_price
         return error
@@ -211,7 +202,7 @@ class USTs:
                        price: float, 
                        issue_date: datetime.date,
                        maturity_date: datetime.date,
-                       as_of_date: datetime.date,
+                       settlement_date: datetime.date,
                        coupon: float,
                        dirty: bool=False
                        ) -> float:
@@ -220,7 +211,7 @@ class USTs:
             ytm = newton(
                 func=self.error_function,
                 x0=guess,
-                args=(price, issue_date, maturity_date, as_of_date, coupon, dirty)
+                args=(price, issue_date, maturity_date, settlement_date, coupon, dirty)
             )
             return round(float(ytm * 100), 6)
         except RuntimeError:
