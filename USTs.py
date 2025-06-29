@@ -40,10 +40,10 @@ class USTs:
         ust_set = pd.merge(prices, auctions, how='inner', on='Cusip')
         ust_set.sort_values(by='Issue date', inplace=True, ascending=False)
         ust_set.drop_duplicates(subset=['Cusip'], keep='first', inplace=True)
+        ust_set['Days to expiry'] = (ust_set['Maturity date'] - pd.to_datetime(settlement_date)).dt.days + 1
+        ust_set.sort_values(by='Days to expiry', ascending=True, inplace=True)
         ust_set = ust_set.reset_index(drop=True)
 
-        while True:
-            return ust_set
 
         if len(ust_set) == len(prices):
             if not include_FRNs:
@@ -51,18 +51,10 @@ class USTs:
             if not include_TIPS:
                 ust_set = ust_set[ust_set['Security type'] != 'TIPS']
             if get_ytms:
-                for row in range(len(ust_set)):
-                    if ust_set.loc[row, 'Security type'] == 'Bill':
-                        ust_set.loc[row, 'EOD YTM'] = self.get_bill_BEYTM(price=ust_set.loc[row, 'End of day'],
-                                                                            maturity_date=ust_set.loc[row, 'Maturity date'].date(),
-                                                                            settlement_date=settlement_date)
-                    elif ust_set.loc[row, 'Security type'] in ['Note', 'Bond']:
-                        ust_set.loc[row, 'EOD YTM'] = self.get_coupon_ytm(price=ust_set.loc[row, 'End of day'],
-                                                                      issue_date=ust_set.loc[row, 'Issue date'].date(),
-                                                                      maturity_date=ust_set.loc[row, 'Maturity date'].date(),
-                                                                      settlement_date=settlement_date,
-                                                                      coupon=ust_set.loc[row, 'Rate'],
-                                                                      dirty=False)
+                ust_set['EOD YTM'] = ust_set.apply(
+                    lambda row: self._get_df_ytm(row, settlement_date),
+                    axis='columns'
+                )
                         
             print("Merged auction and price data successfully\nNo missing or excess data\nAll CUSIPs are identical between DataFrames")
             ust_set = ust_set.drop(columns=['Buy', 'Sell'])
@@ -75,7 +67,7 @@ class USTs:
             print("Length of DataFrames differs - verify data")
             print(len(ust_set), len(prices))
             return None        
-        
+    
     def get_bill_discount_rate(self,
                                price: float,
                                maturity_date: datetime.date,
@@ -216,6 +208,21 @@ class USTs:
             return round(float(ytm * 100), 6)
         except RuntimeError:
             return None
+    
+    def _get_df_ytm(self, row: pd.Series, settlement_date: datetime.date) -> float:
+        if row['Security type'] == 'Bill':
+            ytm = self.get_bill_BEYTM(row['End of day'],
+                                      row['Maturity date'].date(),
+                                      settlement_date)
+        elif row['Security type'] in ['Note', 'Bond']:
+            ytm = self.get_coupon_ytm(price=row['End of day'],
+                                      issue_date=row['Issue date'].date(),
+                                      maturity_date=row['Maturity date'].date(),
+                                      settlement_date=settlement_date,
+                                      coupon=row['Rate'],
+                                      dirty=False)
+        return ytm
+
         
     def get_nth_OTRs(self, n: int) -> pd.DataFrame:
         data = self.auction_data[["cusip", "auction_date", "security_term", "avg_med_yield", "maturity_date"]].copy()
