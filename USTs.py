@@ -1,6 +1,5 @@
 import pandas as pd
-import numpy as np
-from typing import Optional, List
+from typing import Optional
 import datetime
 from datetime import timedelta
 from dateutil.relativedelta import relativedelta
@@ -43,9 +42,9 @@ class USTs:
         outstanding_values = ust_set[~ust_set.duplicated('Cusip', keep='first')][['Cusip', 'Currently outstanding']].set_index('Cusip')
         ust_set = ust_set.drop_duplicates(subset='Cusip', keep='last').set_index('Cusip')
         ust_set.update(outstanding_values)
-        ust_set['Days to expiry'] = (ust_set['Maturity date'] - pd.to_datetime(settlement_date)).dt.days + 1
-        ust_set.sort_values(by='Days to expiry', ascending=True, inplace=True)
-        ust_set = ust_set.reset_index(drop=True)
+        ust_set['Time to expiry'] = ((ust_set['Maturity date'] - pd.to_datetime(settlement_date)).dt.days + 1)/365
+        ust_set.sort_values(by='Time to expiry', ascending=True, inplace=True)
+        ust_set = ust_set.reset_index(drop=False)
 
         if len(ust_set) == len(prices):
             ust_set = ust_set[~ust_set['Original security term'].isin(['30-Year 3-Month', '29-Year 9-Month'])]
@@ -61,11 +60,9 @@ class USTs:
                         
             print("Merged auction and price data successfully\nNo missing or excess data\nAll CUSIPs are identical between DataFrames")
             ust_set = ust_set.drop(columns=['Buy', 'Sell'])
+            ust_set = self._get_ranks(data=ust_set)
             return ust_set
             
-            # else:
-            #     print("CUSIPs differ between DataFrames - verify data")
-            #     return None
         else:
             print("Length of DataFrames differs - verify data")
             print(len(ust_set), len(prices))
@@ -227,24 +224,12 @@ class USTs:
         return ytm
 
         
-    def get_nth_OTRs(self, n: int) -> pd.DataFrame:
-        data = self.auction_data[["cusip", "auction_date", "security_term", "avg_med_yield", "maturity_date"]].copy()
-        data.loc[:, 'run'] = 0
-
-        Tenors = ["2-Year", "3-Year", "5-Year", "7-Year", "10-Year", "20-Year", "30-Year"]
-        otr_df = pd.DataFrame()
-
-        col_loc = data.columns.get_loc('security_term')
-
-        for tenor in Tenors:
-            runs = 0
-            for i in range(len(data)):
-                if runs < n:
-                    if data.iloc[i, col_loc] == tenor:
-                        otr_df = pd.concat([otr_df, data.iloc[[i], :]], ignore_index=True)
-                        otr_df.iloc[-1, -1] = runs + 1
-                        runs += 1
-        otr_df['maturity_date'] = pd.to_datetime(otr_df['maturity_date'])
-        otr_df['auction_date'] = pd.to_datetime(otr_df['auction_date'])
-        otr_df['avg_med_yield'] = pd.to_numeric(otr_df['avg_med_yield'], errors='coerce')              
-        return otr_df
+    def _get_ranks(self, data: pd.DataFrame) -> pd.DataFrame:
+        data.sort_values(
+            by=['Original security term', 'Time to expiry'],
+            ascending=[True, False],
+            inplace=True
+        )
+        data['Rank'] = data.groupby(by='Original security term').cumcount() + 1
+        data.sort_values(by='Time to expiry', ascending=True, inplace=True)
+        return data
