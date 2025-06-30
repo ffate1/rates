@@ -32,20 +32,23 @@ class USTs:
             print("Cannot produce UST set due to missing data")
             return None
         
+        # Merging auction and price data
         auctions = self.auction_data
         auction_cols_to_keep = ['Cusip', 'Original security term', 'Issue date', 'Currently outstanding']
         auctions = auctions[auction_cols_to_keep]
-        
         prices = self.price_data
         ust_set = pd.merge(prices, auctions, how='inner', on='Cusip')
-        ust_set.sort_values(by='Issue date', inplace=True, ascending=False)
-        ust_set.drop_duplicates(subset=['Cusip'], keep='first', inplace=True)
+        
+        # Cleaning up data
+        outstanding_values = ust_set[~ust_set.duplicated('Cusip', keep='first')][['Cusip', 'Currently outstanding']].set_index('Cusip')
+        ust_set = ust_set.drop_duplicates(subset='Cusip', keep='last').set_index('Cusip')
+        ust_set.update(outstanding_values)
         ust_set['Days to expiry'] = (ust_set['Maturity date'] - pd.to_datetime(settlement_date)).dt.days + 1
         ust_set.sort_values(by='Days to expiry', ascending=True, inplace=True)
         ust_set = ust_set.reset_index(drop=True)
 
-
         if len(ust_set) == len(prices):
+            ust_set = ust_set[~ust_set['Original security term'].isin(['30-Year 3-Month', '29-Year 9-Month'])]
             if not include_FRNs:
                 ust_set = ust_set[ust_set['Security type'] != 'FRN']
             if not include_TIPS:
@@ -212,12 +215,12 @@ class USTs:
     def _get_df_ytm(self, row: pd.Series, settlement_date: datetime.date) -> float:
         if row['Security type'] == 'Bill':
             ytm = self.get_bill_BEYTM(row['End of day'],
-                                      row['Maturity date'].date(),
+                                      row['Maturity date'].to_pydatetime(),
                                       settlement_date)
         elif row['Security type'] in ['Note', 'Bond']:
             ytm = self.get_coupon_ytm(price=row['End of day'],
-                                      issue_date=row['Issue date'].date(),
-                                      maturity_date=row['Maturity date'].date(),
+                                      issue_date=row['Issue date'].to_pydatetime(),
+                                      maturity_date=row['Maturity date'].to_pydatetime(),
                                       settlement_date=settlement_date,
                                       coupon=row['Rate'],
                                       dirty=False)
