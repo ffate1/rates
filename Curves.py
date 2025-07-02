@@ -1,4 +1,4 @@
-from scipy.interpolate import UnivariateSpline
+import scipy.interpolate
 from scipy.optimize import minimize
 import pandas as pd
 import numpy as np
@@ -12,15 +12,30 @@ class ParCurves:
         self.y_values = df['EOD YTM'].to_numpy()
 
     def univariate_spline(self, smoothness: float = 0.5, return_data: bool = True):
-        smooth_spline = UnivariateSpline(x=self.x_values,
-                                         y=self.y_values,
-                                         s=smoothness)
+        smooth_spline = scipy.interpolate.UnivariateSpline(x=self.x_values,
+                                                           y=self.y_values,
+                                                           s=smoothness)
         if return_data:
             new_y_values = smooth_spline(np.arange(0.25, 30, 0.01))
             new_x_values = np.arange(0.25, 30, 0.01)
             return new_x_values, new_y_values
         
         return smooth_spline
+    
+    def Bspline_with_knots(self,
+                           knots: Optional[np.ndarray],
+                           k:int = 3,
+                           return_data: bool = True):
+        
+        tck = scipy.interpolate.splrep(x=self.x_values, y=self.y_values, k=k, t=knots)
+        bspline_model = scipy.interpolate.BSpline(*tck)
+        if return_data:
+            x_new = np.arange(0.25, 30, 0.0001)
+            y_curve = bspline_model(x_new)
+            return x_new, y_curve
+         
+        return bspline_model
+        
 
 class MerrillLynchExponentialSpline(ParCurves):
     """
@@ -59,9 +74,6 @@ class MerrillLynchExponentialSpline(ParCurves):
     def theoretical_yields(self, maturities: np.ndarray) -> np.ndarray:
         prices = np.array([self.discount(t) for t in maturities])
         return -np.log(prices) / maturities * 100
-
-    def __call__(self, maturities: np.ndarray) -> np.ndarray:
-        return self.theoretical_yields(maturities)
     
 def calibrate_mles(
         maturities: npt.NDArray[np.float64],
@@ -79,7 +91,7 @@ def calibrate_mles(
     """Fit the MLES model to the given yields using OLS."""
     initial_guess = [0.1] + [1.0] * N
 
-    def objective(params: npt.NDArray[np.float64]) -> float:
+    def objective(params: np.ndarray) -> float:
         alpha = params[0]
         z = np.array(params[1:])
         curve = MerrillLynchExponentialSpline(alpha, N, z)
@@ -89,7 +101,7 @@ def calibrate_mles(
 
         return np.sum((theoretical_yields - np.array(yields)) ** 2) + regularization_term
 
-    result = minimize(objective, initial_guess, method="BFGS")
+    result = minimize(fun=objective, x0=initial_guess, method="BFGS")
     optimized_params = result.x
     optimized_alpha = optimized_params[0]
     optimized_z = np.array(optimized_params[1:])

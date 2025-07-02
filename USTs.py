@@ -53,10 +53,9 @@ class USTs:
             if not include_TIPS:
                 ust_set = ust_set[ust_set['Security type'] != 'TIPS']
             if get_ytms:
-                ust_set['EOD YTM'] = ust_set.apply(
-                    lambda row: self._get_df_ytm(row, settlement_date),
-                    axis='columns'
-                )
+                ust_set['EOD YTM'] = ust_set.apply(lambda row: self._get_df_ytm(row, settlement_date), axis='columns')
+            
+            ust_set['Duration'] = ust_set.apply(lambda row: self._get_duration(row, settlement_date), axis='columns')
                         
             print("Merged auction and price data successfully\nNo missing or excess data\nAll CUSIPs are identical between DataFrames")
             ust_set = ust_set.drop(columns=['Buy', 'Sell'])
@@ -222,7 +221,46 @@ class USTs:
                                       coupon=row['Rate'],
                                       dirty=False)
         return ytm
+    
+    def _get_duration(self, row: pd.Series, settlement_date: datetime.date):
+        maturity = row['Maturity date'].to_pydatetime()
+        issue = row['Issue date'].to_pydatetime()
+        ytm = row['EOD YTM']
+        rate = row['Rate']
+        
+        dates_and_cashflows = self.get_dates_and_cashflows(issue_date=issue,
+                                                        maturity_date=maturity,
+                                                        coupon=rate)
+        for date, _ in dates_and_cashflows:
+            if date > settlement_date:
+                first_pmt_date = self.adjust_for_bad_day(date)
+                previous_index = dates_and_cashflows.index((date, _)) - 1
+                last_date = self.adjust_for_bad_day(dates_and_cashflows[previous_index][0])
+                first_pmt_period = (first_pmt_date - last_date).days
+                time_to_pmt = (first_pmt_date - settlement_date).days
+                break
+        first_period_fraction = time_to_pmt / first_pmt_period
 
+        PV = 0
+        TW_PV = 0
+        t = 0
+        exponent = first_period_fraction
+        previous_date = None
+        for unadjusted_date, cashflow in dates_and_cashflows:
+            date = self.adjust_for_bad_day(unadjusted_date)
+            if date > settlement_date:
+                if previous_date:
+                    days_in_period = (date - previous_date).days
+                    exponent += (days_in_period / (365.25 / 2))
+                pmt_pv = cashflow / ((1 + ytm/2) ** exponent)
+                PV += pmt_pv
+                TW_PV += pmt_pv * exponent
+                previous_date = date
+
+        mac_duration = TW_PV / PV / 2
+        modified_duration = mac_duration / (1 + (ytm / 2)) 
+
+        return modified_duration
         
     def _get_ranks(self, data: pd.DataFrame) -> pd.DataFrame:
         data.sort_values(
