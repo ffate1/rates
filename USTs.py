@@ -1,3 +1,4 @@
+from DataFetcher import DataFetcher
 import pandas as pd
 from typing import Optional
 import datetime
@@ -23,7 +24,8 @@ class USTs:
                             settlement_date: datetime.date,
                             get_ytms: bool = True, 
                             include_FRNs: bool = False,
-                            include_TIPS: bool = False):
+                            include_TIPS: bool = False,
+                            include_outstanding = False):
         # Checking all necessary data is provided
         auction_check = (self.auction_data is None or self.auction_data.empty )
         price_check = (self.price_data is None or self.price_data.empty)
@@ -44,7 +46,6 @@ class USTs:
         ust_set.update(outstanding_values)
         ust_set['Time to expiry'] = ((ust_set['Maturity date'] - pd.to_datetime(settlement_date)).dt.days + 1)/365
         ust_set.sort_values(by='Time to expiry', ascending=True, inplace=True)
-        ust_set = ust_set.reset_index(drop=False)
 
         if len(ust_set) == len(prices):
             ust_set = ust_set[~ust_set['Original security term'].isin(['30-Year 3-Month', '29-Year 9-Month'])]
@@ -54,18 +55,43 @@ class USTs:
                 ust_set = ust_set[ust_set['Security type'] != 'TIPS']
             if get_ytms:
                 ust_set['EOD YTM'] = ust_set.apply(lambda row: self._get_df_ytm(row, settlement_date), axis='columns')
+            if not include_outstanding:
+                ust_set.drop(columns='Currently outstanding', inplace=True)
             
             ust_set['Duration'] = ust_set.apply(lambda row: self._get_duration(row, settlement_date), axis='columns')
                         
             print("Merged auction and price data successfully\nNo missing or excess data\nAll CUSIPs are identical between DataFrames")
             ust_set = ust_set.drop(columns=['Buy', 'Sell'])
             ust_set = self._get_ranks(data=ust_set)
-            return ust_set
+            self.ust_set = ust_set.reset_index(drop=False).set_index('Cusip')
+            return self.ust_set
             
         else:
             print("Length of DataFrames differs - verify data")
             print(len(ust_set), len(prices))
-            return None        
+            return None
+    
+    # def get_residuals(self, interp_x, interp_y) 
+    # To do, need to include plotting 
+    
+    def get_cusip_timeseries(self, CUSIPs: list, start_date: datetime.date, end_date: datetime.date) -> pd.DataFrame:
+        price_data = DataFetcher().fetch_cusip_timeseries(CUSIPs, start_date, end_date)
+        self.ytm_timeseries = price_data.copy()
+
+        for cusip in price_data.columns:
+            cusip_info = self.ust_set.loc[cusip]
+            maturity = cusip_info['Maturity date'].date()
+            issue = cusip_info["Issue date"].date()
+            coupon = float(cusip_info['Rate'])
+
+            for date in price_data.index:
+                settlement = self.adjust_for_bad_day(date.date() + relativedelta(days=1))
+                price = self.ytm_timeseries.loc[date, cusip]
+                ytm = self.get_coupon_ytm(price, issue, maturity, settlement, coupon, dirty=False)
+                self.ytm_timeseries.loc[date, cusip] = ytm
+        
+        return self.ytm_timeseries, price_data
+
     
     def get_bill_discount_rate(self,
                                price: float,
@@ -225,7 +251,7 @@ class USTs:
     def _get_duration(self, row: pd.Series, settlement_date: datetime.date):
         maturity = row['Maturity date'].to_pydatetime()
         issue = row['Issue date'].to_pydatetime()
-        ytm = row['EOD YTM']
+        ytm = row['EOD YTM']/100
         rate = row['Rate']
         
         dates_and_cashflows = self.get_dates_and_cashflows(issue_date=issue,

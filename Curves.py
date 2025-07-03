@@ -30,7 +30,7 @@ class ParCurves:
         tck = scipy.interpolate.splrep(x=self.x_values, y=self.y_values, k=k, t=knots)
         bspline_model = scipy.interpolate.BSpline(*tck)
         if return_data:
-            x_new = np.arange(0.25, 30, 0.0001)
+            x_new = np.arange(90/365, 30, 1/365)
             y_curve = bspline_model(x_new)
             return x_new, y_curve
          

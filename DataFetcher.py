@@ -122,3 +122,31 @@ class DataFetcher:
         
         return df
     
+    def fetch_cusip_timeseries(self, CUSIPs: list, start_date: datetime.date, end_date: datetime.date) -> pd.DataFrame:
+        date_range = pd.date_range(start=start_date, end=end_date).to_list()
+        all_data = dict()
+        
+        for date in date_range:
+            date_price_info = dict()
+            payload = {
+                        "priceDate.month": date.month,
+                        "priceDate.day": date.day,
+                        "priceDate.year": date.year,
+                        "submit": "Show Prices"
+                    }
+            response = requests.post(url=self.FedInvest_url, data=payload, timeout=30)
+            response.raise_for_status()
+
+            output = BeautifulSoup(response.text, "html.parser")
+            table = output.find("table", class_="data1")
+            data = table.find_all("tr")[1:]
+            if data:
+                for tr in data:
+                    data_row = [td.get_text(strip=True) for td in tr.find_all("td")]
+                    if data_row[0] in CUSIPs: date_price_info[data_row[0]] = data_row[7]
+            all_data[date] = date_price_info
+        
+        prices_df = pd.DataFrame(data=all_data).transpose().rename_axis("Date").dropna(axis=0)
+        for col in prices_df.columns:
+            prices_df[col] = pd.to_numeric(prices_df[col])
+        return prices_df
