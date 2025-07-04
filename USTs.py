@@ -1,11 +1,14 @@
 from DataFetcher import DataFetcher
 import pandas as pd
-from typing import Optional
+import numpy as np
+from typing import Optional, Tuple
 import datetime
 from datetime import timedelta
 from dateutil.relativedelta import relativedelta
 from scipy.optimize import newton
 import pandas_market_calendars as mcal
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 class USTs:
     def __init__(self,
@@ -49,6 +52,7 @@ class USTs:
 
         if len(ust_set) == len(prices):
             ust_set = ust_set[~ust_set['Original security term'].isin(['30-Year 3-Month', '29-Year 9-Month'])]
+            ust_set['UST label'] = ust_set.apply(lambda row: self._get_ust_label(row), axis='columns')
             if not include_FRNs:
                 ust_set = ust_set[ust_set['Security type'] != 'FRN']
             if not include_TIPS:
@@ -71,9 +75,6 @@ class USTs:
             print(len(ust_set), len(prices))
             return None
     
-    # def get_residuals(self, interp_x, interp_y) 
-    # To do, need to include plotting 
-    
     def get_cusip_timeseries(self, CUSIPs: list, start_date: datetime.date, end_date: datetime.date) -> pd.DataFrame:
         price_data = DataFetcher().fetch_cusip_timeseries(CUSIPs, start_date, end_date)
         self.ytm_timeseries = price_data.copy()
@@ -90,9 +91,31 @@ class USTs:
                 ytm = self.get_coupon_ytm(price, issue, maturity, settlement, coupon, dirty=False)
                 self.ytm_timeseries.loc[date, cusip] = ytm
         
+        if len(CUSIPs) == 2:
+            self.ytm_timeseries['Spread'] = self.ytm_timeseries.apply(lambda row: row[1] - row[0], axis='columns')
         return self.ytm_timeseries, price_data
 
-    
+    def get_residuals(self, curve: Tuple[np.ndarray, np.ndarray], plot_residuals: bool = True) -> pd.DataFrame:
+        
+        bond_df = self.ust_set[(self.ust_set['Security type'] != 'Bill') & (self.ust_set['Time to expiry'] > 90/365)]
+        curve_df = pd.DataFrame({"Time to expiry": curve[0], "Theoretical YTM": curve[1]})
+        merged_df = pd.merge_asof(left=bond_df, right=curve_df, on='Time to expiry')
+        merged_df['Residual'] = (merged_df['EOD YTM'] - merged_df['Theoretical YTM']) * 100
+        self.residuals_df = merged_df[['Time to expiry', 'Maturity date', 'Original security term', 'EOD YTM', 'Theoretical YTM', 'Residual']]
+        
+        if plot_residuals:
+            plt.figure(figsize=(10,6))
+            sns.scatterplot(data=self.residuals_df, x='Time to expiry', y='Residual', hue='Original security term',
+                            hue_order=['2-Year', '3-Year', '5-Year', '7-Year', '10-Year', '20-Year', '30-Year'],
+                            s=50, palette='bright')
+            sns.despine()
+            plt.axhline(y=0, color='red', linestyle='--', linewidth=1)
+            plt.xlabel("Years to Maturity", fontdict={"size": 12})
+            plt.ylabel("Residual to fitted curve (bps)", fontdict={"size": 12})
+            plt.legend(loc="lower right", frameon=False)
+            plt.show()
+        return self.residuals_df
+
     def get_bill_discount_rate(self,
                                price: float,
                                maturity_date: datetime.date,
@@ -297,3 +320,8 @@ class USTs:
         data['Rank'] = data.groupby(by='Original security term').cumcount() + 1
         data.sort_values(by='Time to expiry', ascending=True, inplace=True)
         return data
+    
+    def _get_ust_label(self, row: pd.Series) -> str:
+        rate_str = str(row['Rate']) + '%'
+        date_str = row['Maturity date'].strftime("%b-%y")
+        return (rate_str + " " + date_str)
