@@ -40,6 +40,7 @@ class USTs:
         auctions = self.auction_data
         auction_cols_to_keep = ['Cusip', 'Original security term', 'Issue date', 'Currently outstanding']
         auctions = auctions[auction_cols_to_keep]
+        auctions = auctions.rename(columns={'Original security term': 'Security term'})
         prices = self.price_data
         ust_set = pd.merge(prices, auctions, how='inner', on='Cusip')
         
@@ -47,11 +48,11 @@ class USTs:
         outstanding_values = ust_set[~ust_set.duplicated('Cusip', keep='first')][['Cusip', 'Currently outstanding']].set_index('Cusip')
         ust_set = ust_set.drop_duplicates(subset='Cusip', keep='last').set_index('Cusip')
         ust_set.update(outstanding_values)
-        ust_set['Time to expiry'] = ((ust_set['Maturity date'] - pd.to_datetime(settlement_date)).dt.days + 1)/365
-        ust_set.sort_values(by='Time to expiry', ascending=True, inplace=True)
+        ust_set['Years to maturity'] = ((ust_set['Maturity date'] - pd.to_datetime(settlement_date)).dt.days + 1)/365
+        ust_set.sort_values(by='Years to maturity', ascending=True, inplace=True)
 
         if len(ust_set) == len(prices):
-            ust_set = ust_set[~ust_set['Original security term'].isin(['30-Year 3-Month', '29-Year 9-Month'])]
+            ust_set = ust_set[~ust_set['Security term'].isin(['30-Year 3-Month', '29-Year 9-Month'])]
             ust_set['UST label'] = ust_set.apply(lambda row: self._get_ust_label(row), axis='columns')
             if not include_FRNs:
                 ust_set = ust_set[ust_set['Security type'] != 'FRN']
@@ -92,20 +93,20 @@ class USTs:
                 self.ytm_timeseries.loc[date, cusip] = ytm
         
         if len(CUSIPs) == 2:
-            self.ytm_timeseries['Spread'] = self.ytm_timeseries.apply(lambda row: row[1] - row[0], axis='columns')
+            self.ytm_timeseries['Spread'] = self.ytm_timeseries.iloc[:, 1] - self.ytm_timeseries.iloc[:, 0]
         return self.ytm_timeseries, price_data
 
-    def get_residuals(self, curve: Tuple[np.ndarray, np.ndarray], plot_residuals: bool = True) -> pd.DataFrame:
+    def get_residuals(self, curve: Tuple[np.ndarray, np.ndarray], return_full_df: bool = True, plot_residuals: bool = True) -> pd.DataFrame:
         
-        bond_df = self.ust_set[(self.ust_set['Security type'] != 'Bill') & (self.ust_set['Time to expiry'] > 90/365)]
-        curve_df = pd.DataFrame({"Time to expiry": curve[0], "Theoretical YTM": curve[1]})
-        merged_df = pd.merge_asof(left=bond_df, right=curve_df, on='Time to expiry')
+        bond_df = self.ust_set[(self.ust_set['Security type'] != 'Bill') & (self.ust_set['Years to maturity'] > 90/365)]
+        curve_df = pd.DataFrame({"Years to maturity": curve[0], "Theoretical YTM": curve[1]})
+        merged_df = pd.merge_asof(left=bond_df.reset_index(drop=False), right=curve_df, on='Years to maturity').set_index('Cusip')
         merged_df['Residual'] = (merged_df['EOD YTM'] - merged_df['Theoretical YTM']) * 100
-        self.residuals_df = merged_df[['Time to expiry', 'Maturity date', 'Original security term', 'EOD YTM', 'Theoretical YTM', 'Residual']]
-        
+        self.residuals_df = merged_df[['Years to maturity', 'Maturity date', 'Security term', 'EOD YTM', 'Theoretical YTM', 'Residual']]
+        self.bond_set_with_residuals = merged_df
         if plot_residuals:
             plt.figure(figsize=(10,6))
-            sns.scatterplot(data=self.residuals_df, x='Time to expiry', y='Residual', hue='Original security term',
+            sns.scatterplot(data=self.residuals_df, x='Years to maturity', y='Residual', hue='Security term',
                             hue_order=['2-Year', '3-Year', '5-Year', '7-Year', '10-Year', '20-Year', '30-Year'],
                             s=50, palette='bright')
             sns.despine()
@@ -114,7 +115,11 @@ class USTs:
             plt.ylabel("Residual to fitted curve (bps)", fontdict={"size": 12})
             plt.legend(loc="lower right", frameon=False)
             plt.show()
-        return self.residuals_df
+        
+        if return_full_df:
+            return self.bond_set_with_residuals
+        else:
+            return self.residuals_df
 
     def get_bill_discount_rate(self,
                                price: float,
@@ -313,12 +318,12 @@ class USTs:
         
     def _get_ranks(self, data: pd.DataFrame) -> pd.DataFrame:
         data.sort_values(
-            by=['Original security term', 'Time to expiry'],
+            by=['Security term', 'Years to maturity'],
             ascending=[True, False],
             inplace=True
         )
-        data['Rank'] = data.groupby(by='Original security term').cumcount() + 1
-        data.sort_values(by='Time to expiry', ascending=True, inplace=True)
+        data['Rank'] = data.groupby(by='Security term').cumcount() + 1
+        data.sort_values(by='Years to maturity', ascending=True, inplace=True)
         return data
     
     def _get_ust_label(self, row: pd.Series) -> str:

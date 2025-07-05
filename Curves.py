@@ -8,7 +8,7 @@ from typing import Optional, Tuple, Any
 class ParCurves:
     def __init__(self, df: pd.DataFrame):
         self.data = df
-        self.x_values = df['Time to expiry'].to_numpy()
+        self.x_values = df['Years to maturity'].to_numpy()
         self.y_values = df['EOD YTM'].to_numpy()
 
     def univariate_spline(self, smoothness: float = 0.5, return_data: bool = True):
