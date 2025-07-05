@@ -327,6 +327,6 @@ class USTs:
         return data
     
     def _get_ust_label(self, row: pd.Series) -> str:
-        rate_str = str(row['Rate']) + '%'
+        rate_str = f"{row['Rate']:.3f}%"
         date_str = row['Maturity date'].strftime("%b-%y")
         return (rate_str + " " + date_str)
