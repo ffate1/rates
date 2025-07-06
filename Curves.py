@@ -28,13 +28,13 @@ class ParCurves:
                            return_data: bool = True):
         
         tck = scipy.interpolate.splrep(x=self.x_values, y=self.y_values, k=k, t=knots)
-        bspline_model = scipy.interpolate.BSpline(*tck)
+        self.bspline_model = scipy.interpolate.BSpline(*tck)
         if return_data:
             x_new = np.arange(90/365, 30, 1/365)
-            y_curve = bspline_model(x_new)
+            y_curve = self.bspline_model(x_new)
             return x_new, y_curve
          
-        return bspline_model
+        return self.bspline_model
         
 
 class MerrillLynchExponentialSpline(ParCurves):

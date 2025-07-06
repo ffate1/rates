@@ -1,3 +1,4 @@
+import scipy.interpolate
 from DataFetcher import DataFetcher
 import pandas as pd
 import numpy as np
@@ -5,10 +6,11 @@ from typing import Optional, Tuple
 import datetime
 from datetime import timedelta
 from dateutil.relativedelta import relativedelta
-from scipy.optimize import newton
+import scipy
 import pandas_market_calendars as mcal
 import matplotlib.pyplot as plt
 import seaborn as sns
+
 
 class USTs:
     def __init__(self,
@@ -98,12 +100,15 @@ class USTs:
 
     def get_residuals(self, curve: Tuple[np.ndarray, np.ndarray], return_full_df: bool = True, plot_residuals: bool = True) -> pd.DataFrame:
         
-        bond_df = self.ust_set[(self.ust_set['Security type'] != 'Bill') & (self.ust_set['Years to maturity'] > 90/365)]
+        bond_df = self.ust_set[(self.ust_set['Security type'] != 'Bill') & (self.ust_set['Years to maturity'] > 90/365)].copy()
         curve_df = pd.DataFrame({"Years to maturity": curve[0], "Theoretical YTM": curve[1]})
+        self.par_curve = curve_df.copy()
+
         merged_df = pd.merge_asof(left=bond_df.reset_index(drop=False), right=curve_df, on='Years to maturity').set_index('Cusip')
         merged_df['Residual'] = (merged_df['EOD YTM'] - merged_df['Theoretical YTM']) * 100
         self.residuals_df = merged_df[['Years to maturity', 'Maturity date', 'Security term', 'EOD YTM', 'Theoretical YTM', 'Residual']]
-        self.bond_set_with_residuals = merged_df
+        self.bond_set_with_residuals = merged_df.copy()
+
         if plot_residuals:
             plt.figure(figsize=(10,6))
             sns.scatterplot(data=self.residuals_df, x='Years to maturity', y='Residual', hue='Security term',
@@ -120,6 +125,79 @@ class USTs:
             return self.bond_set_with_residuals
         else:
             return self.residuals_df
+        
+    def get_initial_screening_set(self,
+                                  Bspline_model: scipy.interpolate._bsplines.BSpline,
+                                  ytm_threshold: float = 0.1,
+                                  duration_threshold: float = 1.0,
+                                  maturity_threshold: float = 4.0) -> pd.DataFrame:
+        cols_to_drop = ['Security type', 'Rate', 'Maturity date', 'Issue date', 'End of day', 'Rank', 'Theoretical YTM', 'Residual']
+        screening_df = self.bond_set_with_residuals.drop(columns=cols_to_drop)
+        
+        # Cross merging to filter through data
+        screening_df['key'] = 1
+        all_pairs_df = pd.merge(
+            screening_df, 
+            screening_df, 
+            on='key', 
+            suffixes=(' long', ' short')
+        ).drop('key', axis=1)
+
+        filtered_df = all_pairs_df[
+            (abs(all_pairs_df['Years to maturity long'] - all_pairs_df['Years to maturity short']) <= maturity_threshold) &
+            (abs(all_pairs_df['Duration long'] - all_pairs_df['Duration short']) <= duration_threshold) &
+            (abs(all_pairs_df['EOD YTM long'] - all_pairs_df['EOD YTM short']) >= ytm_threshold) &
+            (all_pairs_df['Years to maturity long'] > 10)].copy()
+
+        # Interpolating duration to find curves for each security pair
+        otr_set = self.ust_set[self.ust_set['Rank'] == 1]
+        yearly_index = np.arange(1, 30 + 1, 0.5)
+        interpolator = scipy.interpolate.interp1d(
+            x=otr_set['Years to maturity'],
+            y=otr_set['Duration'],
+            kind='cubic',
+            fill_value='extrapolate')
+        interpolated_duration = interpolator(yearly_index) 
+        interpolated_duration_df = pd.DataFrame({
+            "Years to maturity": yearly_index,
+            "Interpolated duration": interpolated_duration
+        })
+
+        first_merge = pd.merge_asof(
+            filtered_df.sort_values('Duration long'),
+            interpolated_duration_df,
+            left_on='Duration long',
+            right_on='Interpolated duration',
+            direction='nearest'
+        ).rename(columns={"Years to maturity": "Implied tenor long"}).drop(columns='Interpolated duration')
+
+        second_merge = pd.merge_asof(
+            first_merge.sort_values('Duration short'),
+            interpolated_duration_df,
+            left_on='Duration short',
+            right_on='Interpolated duration',
+            direction='nearest'
+        ).rename(columns={"Years to maturity": "Implied tenor short"}).drop(columns='Interpolated duration')
+        
+        final_df = second_merge 
+        final_df['Curve exposure'] = np.where(
+            final_df['Duration long'] < final_df['Duration short'],
+            final_df['Implied tenor long'].astype(str) + 's' + final_df['Implied tenor short'].astype(str) + 's steepener',
+            final_df['Implied tenor short'].astype(str) + 's' + final_df['Implied tenor long'].astype(str) + 's flattener'
+        )
+        final_df['Par curve slope'] = np.where(
+            final_df['Implied tenor short'] < final_df['Implied tenor long'],
+            Bspline_model(final_df['Implied tenor long']) - Bspline_model(final_df['Implied tenor short']),
+            Bspline_model(final_df['Implied tenor short']) - Bspline_model(final_df['Implied tenor long'])
+        )
+        final_df['Spread to par curve'] = np.where(
+            final_df['Implied tenor short'] < final_df['Implied tenor long'],
+            final_df['EOD YTM long'] - final_df['EOD YTM short'] - final_df['Par curve slope'], # flattener spread to par calculation - CLEAN UP for filtering steepeners and flatteners
+            final_df['Par curve slope'] - final_df['EOD YTM short'] - final_df['EOD YTM long'] # steepener spread to par calculation
+        )
+        final_df = final_df[abs(final_df['Spread to par curve']) > 0.02]
+        final_df = final_df.sort_values(by='Spread to par curve', ascending=False)
+        return final_df, interpolated_duration_df
 
     def get_bill_discount_rate(self,
                                price: float,
@@ -253,7 +331,7 @@ class USTs:
                        ) -> float:
         guess = coupon / 100
         try:
-            ytm = newton(
+            ytm = scipy.optimize.newton(
                 func=self.error_function,
                 x0=guess,
                 args=(price, issue_date, maturity_date, settlement_date, coupon, dirty)
