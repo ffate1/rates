@@ -95,7 +95,10 @@ class USTs:
                 self.ytm_timeseries.loc[date, cusip] = ytm
         
         if len(CUSIPs) == 2:
-            self.ytm_timeseries['Spread'] = self.ytm_timeseries.iloc[:, 1] - self.ytm_timeseries.iloc[:, 0]
+            if self.ytm_timeseries.shape[1] < 2:
+                print("wrong shape")
+            else:
+                self.ytm_timeseries['Spread'] = self.ytm_timeseries.iloc[:, 1] - self.ytm_timeseries.iloc[:, 0]
         return self.ytm_timeseries, price_data
 
     def get_residuals(self, curve: Tuple[np.ndarray, np.ndarray], return_full_df: bool = True, plot_residuals: bool = True) -> pd.DataFrame:
@@ -151,7 +154,7 @@ class USTs:
 
         # Interpolating duration to find curves for each security pair
         otr_set = self.ust_set[self.ust_set['Rank'] == 1]
-        yearly_index = np.arange(1, 30 + 1, 0.5)
+        yearly_index = np.arange(1, 30 + 1, 0.2)
         interpolator = scipy.interpolate.interp1d(
             x=otr_set['Years to maturity'],
             y=otr_set['Duration'],
@@ -182,8 +185,13 @@ class USTs:
         final_df = second_merge 
         final_df['Curve exposure'] = np.where(
             final_df['Duration long'] < final_df['Duration short'],
-            final_df['Implied tenor long'].astype(str) + 's' + final_df['Implied tenor short'].astype(str) + 's steepener',
-            final_df['Implied tenor short'].astype(str) + 's' + final_df['Implied tenor long'].astype(str) + 's flattener'
+            final_df['Implied tenor long'].astype(int).astype(str) + 's' + final_df['Implied tenor short'].astype(int).astype(str) + 's steepener',
+            final_df['Implied tenor short'].astype(int).astype(str) + 's' + final_df['Implied tenor long'].astype(int).astype(str) + 's flattener'
+        )
+        final_df['Current spread'] = np.where(
+            final_df['EOD YTM long'] > final_df['EOD YTM short'],
+            final_df['EOD YTM long'] - final_df['EOD YTM short'],
+            final_df['EOD YTM short'] - final_df['EOD YTM long']
         )
         final_df['Par curve slope'] = np.where(
             final_df['Implied tenor short'] < final_df['Implied tenor long'],
@@ -195,9 +203,32 @@ class USTs:
             final_df['EOD YTM long'] - final_df['EOD YTM short'] - final_df['Par curve slope'], # flattener spread to par calculation - CLEAN UP for filtering steepeners and flatteners
             final_df['Par curve slope'] - final_df['EOD YTM short'] - final_df['EOD YTM long'] # steepener spread to par calculation
         )
-        final_df = final_df[abs(final_df['Spread to par curve']) > 0.02]
+        final_df = final_df[final_df['Spread to par curve'] > 0.02]
         final_df = final_df.sort_values(by='Spread to par curve', ascending=False)
-        return final_df, interpolated_duration_df
+
+        columns=['Duration exposure', 'Current spread', 'Par curve spread', 'Long bond', 'Tenor', 'YTM', 'Short bond', 'Tenor', 'YTM']
+        data = []
+        for i in range(5):
+            row = final_df.iloc[i, :]
+            row_duration = 'Long duration' if row['Duration long'] > row['Duration short'] else 'Short duration'
+            row_spread = f"{(row['Current spread'] * 100):.1f} bps"
+            row_par_curve = f"{(row['Par curve slope'] * 100):.1f} bps"
+            row_long, tenor_long, ytm_long = row['UST label long'], row['Security term long'], row['EOD YTM long']
+            row_short, tenor_short, ytm_short = row['UST label short'], row['Security term short'], row['EOD YTM short']
+            row_data = [row_duration, row_spread, row_par_curve, row_long, tenor_long, ytm_long, row_short, tenor_short, ytm_short]
+            data.append(row_data)
+
+        trade_screening_df = pd.DataFrame(columns=columns, data=data)
+
+        for row in trade_screening_df.values:
+            cusips = [self._get_cusip_from_label(row[3]), self._get_cusip_from_label(row[6])]
+            print(cusips)
+            ytm_timeseries, _ = self.get_cusip_timeseries(cusips, datetime.date(2025, 1, 1), datetime.date(2025, 6, 27))
+            print(ytm_timeseries)
+            plt.plot(ytm_timeseries['Spread'])
+            plt.show()
+
+        return trade_screening_df
 
     def get_bill_discount_rate(self,
                                price: float,
@@ -408,3 +439,8 @@ class USTs:
         rate_str = f"{row['Rate']:.3f}%"
         date_str = row['Maturity date'].strftime("%b-%y")
         return (rate_str + " " + date_str)
+    
+    def _get_cusip_from_label(self, label: str) -> str:
+        coords = np.where(self.ust_set == label)
+        row, col = coords
+        return self.ust_set.index[row][0]
