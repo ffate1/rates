@@ -1,5 +1,6 @@
 import scipy.interpolate
 from DataFetcher import DataFetcher
+from Curves import ParCurves, calibrate_mles
 import pandas as pd
 import numpy as np
 from typing import Optional, Tuple
@@ -10,15 +11,16 @@ import scipy
 import pandas_market_calendars as mcal
 import matplotlib.pyplot as plt
 import seaborn as sns
+import plotly.graph_objects as go
 
 
 class USTs:
-    def __init__(self,
-                 auction_data: Optional[pd.DataFrame],
-                 price_data: Optional[pd.DataFrame]):
+    def __init__(self, date: datetime.date):
 
-        self.auction_data = auction_data
-        self.price_data = price_data
+        self.auction_data = DataFetcher().fetch_auction_data()
+        self.price_data = DataFetcher().fetch_historical_UST_data(
+            date=datetime.datetime(date.year, date.month, date.day)
+        )
         
         holiday_array = mcal.get_calendar('NYSE').holidays().holidays
         start, end = datetime.date(1990, 1, 1), datetime.date(2060, 1, 1)
@@ -27,23 +29,29 @@ class USTs:
 
     def get_current_UST_set(self,
                             settlement_date: datetime.date,
+                            auction_data: Optional[pd.DataFrame] = None,
+                            price_data: Optional[pd.DataFrame] = None,
                             get_ytms: bool = True, 
                             include_FRNs: bool = False,
                             include_TIPS: bool = False,
                             include_outstanding = False):
         # Checking all necessary data is provided
-        auction_check = (self.auction_data is None or self.auction_data.empty )
-        price_check = (self.price_data is None or self.price_data.empty)
+        if auction_data is None:
+            auction_data = self.auction_data
+        if price_data is None:
+            price_data = self.price_data
+
+        auction_check = (auction_data is None or auction_data.empty)
+        price_check = (price_data is None or price_data.empty)
         if auction_check or price_check:
             print("Cannot produce UST set due to missing data")
             return None
         
         # Merging auction and price data
-        auctions = self.auction_data
         auction_cols_to_keep = ['Cusip', 'Original security term', 'Issue date', 'Currently outstanding']
-        auctions = auctions[auction_cols_to_keep]
+        auctions = auction_data[auction_cols_to_keep].copy()
         auctions = auctions.rename(columns={'Original security term': 'Security term'})
-        prices = self.price_data
+        prices = price_data.copy()
         ust_set = pd.merge(prices, auctions, how='inner', on='Cusip')
         
         # Cleaning up data
@@ -78,6 +86,85 @@ class USTs:
             print(len(ust_set), len(prices))
             return None
     
+    def plot_ust_curve(self, bspline_curve: bool = True, univariate_spline: bool = True, mles_spline: bool = False):
+        fig = go.Figure()
+        hovertemplate = (
+            "<b>CUSIP:</b> %{customdata[0]}<br>"+
+            "<b>YTM:</b> %{y:.3%}<br>"+
+            "<b>Coupon</b> %{customdata[2]}<br>"+
+            "<b>Price:</b> %{customdata[4]:.4f}<br>"+
+            "<b>Duration:</b> %{customdata[10]:.2f}<br>"+
+            "<b>Maturity date:</b> %{customdata[3]|%Y-%m-%d}<br>"+
+            "<b>Issue date:</b> %{customdata[6]|%Y-%m-%d}<br>"
+        )
+        years = ['2', '3', '5', '7', '10', '20', '30']
+        terms = [tenor + '-Year' for tenor in years] # Ordered list
+        for tenor in terms:
+            subset = self.ust_set[(self.ust_set['Security term'] == tenor) &
+                                  (self.ust_set['Years to maturity'] > 90/365)].reset_index(drop=False)
+            custom_data = subset.to_numpy()
+            fig.add_trace(go.Scatter(
+                x=subset['Years to maturity'],
+                y=subset['EOD YTM']/100,
+                mode='markers',
+                name=tenor,
+                hovertemplate=hovertemplate,
+                customdata=custom_data,
+                text=subset['EOD YTM'],
+                marker=dict(
+                    size=8
+                )
+            ))
+        filtered_set = self.ust_set[(self.ust_set['Years to maturity'] > 90/365) &
+                                    (self.ust_set['Security type'] != 'Bill') &
+                                    (self.ust_set['Rank'] > 2)] # Removing OTR securities
+        curve_builder = ParCurves(filtered_set)
+
+        if bspline_curve:
+            bspline_x, bspline_y = curve_builder.Bspline_with_knots(knots=[0.5, 1, 2, 3, 5, 7, 8, 9, 10, 15, 20, 25])
+            fig.add_trace(go.Scatter(
+                x=bspline_x,
+                y=bspline_y/100,
+                mode='lines',
+                name='Cubic B-spline with knots',
+                line=dict(width=3)
+            ))
+        if univariate_spline:
+            spline_x, spline_y = curve_builder.univariate_spline(smoothness=0.2, return_data=True)
+            fig.add_trace(go.Scatter(
+                x=spline_x,
+                y=spline_y/100,
+                mode='lines',
+                name='Smoothed cubic spline'
+            ))
+        if mles_spline:
+            mles_curve, _ = calibrate_mles(maturities=filtered_set['Years to maturity'].to_numpy(), # Merrill Lynch Exponential Spline (parametric model)
+                        yields=filtered_set['EOD YTM'].to_numpy(),
+                        N=9,
+                        overnight_rate=4.33)
+            mles_x = np.arange(0.25, 30, 1/365)
+            mles_y = mles_curve.theoretical_yields(maturities=mles_x)
+            fig.add_trace(go.Scatter(
+                x=mles_x,
+                y=mles_y/100,
+                mode='lines',
+                name='Merrill Lynch Exponential Spline',
+                line=dict(color='blue')
+            ))
+
+        fig.update_layout(
+            title='US Treasury Yield Curve',
+            width=1400,
+            height=600,
+            margin=dict(l=20, r=20, t=50, b=20),
+            xaxis_title='Years to maturity',
+            yaxis_title='End-of-Day Yield to Maturity (YTM)',
+            yaxis_tickformat='.2%',
+            legend_title_text='Security Tenors',
+            template='plotly_dark'
+        )
+        fig.show()
+        
     def get_cusip_timeseries(self, CUSIPs: list, start_date: datetime.date, end_date: datetime.date) -> pd.DataFrame:
         price_data = DataFetcher().fetch_cusip_timeseries(CUSIPs, start_date, end_date)
         self.ytm_timeseries = price_data.copy()
@@ -130,12 +217,16 @@ class USTs:
             return self.residuals_df
         
     def get_initial_screening_set(self,
-                                  Bspline_model: scipy.interpolate._bsplines.BSpline,
                                   ytm_threshold: float = 0.1,
                                   duration_threshold: float = 1.0,
                                   maturity_threshold: float = 4.0) -> pd.DataFrame:
-        cols_to_drop = ['Security type', 'Rate', 'Maturity date', 'Issue date', 'End of day', 'Rank', 'Theoretical YTM', 'Residual']
-        screening_df = self.bond_set_with_residuals.drop(columns=cols_to_drop)
+        filtered_set = self.ust_set[(self.ust_set['Years to maturity'] > 90/365) &
+                                    (self.ust_set['Security type'] != 'Bill') &
+                                    (self.ust_set['Rank'] > 2)] # Removing OTR securities
+        Bspline_model = ParCurves(filtered_set).Bspline_with_knots(knots=[0.5, 1, 2, 3, 5, 7, 8, 9, 10, 15, 20, 25],
+                                                                   return_data=False)
+        cols_to_drop = ['Security type', 'Rate', 'Maturity date', 'Issue date', 'End of day', 'Rank']
+        screening_df = self.ust_set.drop(columns=cols_to_drop)
         
         # Cross merging to filter through data
         screening_df['key'] = 1
@@ -206,7 +297,8 @@ class USTs:
         final_df = final_df[final_df['Spread to par curve'] > 0.02]
         final_df = final_df.sort_values(by='Spread to par curve', ascending=False)
 
-        columns=['Duration exposure', 'Current spread', 'Par curve spread', 'Long bond', 'Tenor', 'YTM', 'Short bond', 'Tenor', 'YTM']
+        columns=['Duration exposure', 'Current spread', 'Par curve spread',
+                 'Long bond', 'Tenor', 'YTM', 'Short bond', 'Tenor', 'YTM', 'Duration long', 'Duration short']
         data = []
         for i in range(5):
             row = final_df.iloc[i, :]
@@ -215,20 +307,18 @@ class USTs:
             row_par_curve = f"{(row['Par curve slope'] * 100):.1f} bps"
             row_long, tenor_long, ytm_long = row['UST label long'], row['Security term long'], row['EOD YTM long']
             row_short, tenor_short, ytm_short = row['UST label short'], row['Security term short'], row['EOD YTM short']
-            row_data = [row_duration, row_spread, row_par_curve, row_long, tenor_long, ytm_long, row_short, tenor_short, ytm_short]
+            duration_long, duration_short = row['Duration long'], row['Duration short']
+            row_data = [row_duration, row_spread, row_par_curve,
+                        row_long, tenor_long, ytm_long,
+                        row_short, tenor_short, ytm_short,
+                        duration_long, duration_short]
             data.append(row_data)
 
-        trade_screening_df = pd.DataFrame(columns=columns, data=data)
-
-        for row in trade_screening_df.values:
-            cusips = [self._get_cusip_from_label(row[3]), self._get_cusip_from_label(row[6])]
-            print(cusips)
-            ytm_timeseries, _ = self.get_cusip_timeseries(cusips, datetime.date(2025, 1, 1), datetime.date(2025, 6, 27))
-            print(ytm_timeseries)
-            plt.plot(ytm_timeseries['Spread'])
-            plt.show()
-
-        return trade_screening_df
+        self.trade_screening_set = pd.DataFrame(columns=columns, data=data)
+        return self.trade_screening_set.drop(columns=['Duration long', 'Duration short'])
+    
+    def plot_trades(self):
+        pass
 
     def get_bill_discount_rate(self,
                                price: float,
@@ -247,6 +337,8 @@ class USTs:
         """Following TreasuryDirect methodology to get bond-equivalent yields for maturities
         less than or greater than 6 months"""
         tenor = (maturity_date - settlement_date).days
+        if tenor == 0:
+            return 0
         YTM = (100 - price) / price / (tenor / 365)
         return YTM * 100
 
@@ -304,6 +396,7 @@ class USTs:
         dates_and_cashflows = self.get_dates_and_cashflows(issue_date=issue_date,
                                                         maturity_date=maturity_date,
                                                         coupon=coupon)
+        time_to_pmt, first_pmt_period = None, None
         for date, _ in dates_and_cashflows:
             if date > settlement_date:
                 first_pmt_date = self.adjust_for_bad_day(date)
@@ -312,6 +405,9 @@ class USTs:
                 first_pmt_period = (first_pmt_date - last_date).days
                 time_to_pmt = (first_pmt_date - settlement_date).days
                 break
+        if time_to_pmt is None or first_pmt_period is None:
+            return 100
+        
         first_period_fraction = time_to_pmt / first_pmt_period
 
         PV = 0
@@ -394,6 +490,7 @@ class USTs:
         dates_and_cashflows = self.get_dates_and_cashflows(issue_date=issue,
                                                         maturity_date=maturity,
                                                         coupon=rate)
+        time_to_pmt, first_pmt_period = None, None
         for date, _ in dates_and_cashflows:
             if date > settlement_date:
                 first_pmt_date = self.adjust_for_bad_day(date)
@@ -402,6 +499,8 @@ class USTs:
                 first_pmt_period = (first_pmt_date - last_date).days
                 time_to_pmt = (first_pmt_date - settlement_date).days
                 break
+        if time_to_pmt is None or first_pmt_period is None:
+            return 0.0
         first_period_fraction = time_to_pmt / first_pmt_period
 
         PV = 0
