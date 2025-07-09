@@ -75,7 +75,7 @@ class USTs:
             
             ust_set['Duration'] = ust_set.apply(lambda row: self._get_duration(row, settlement_date), axis='columns')
                         
-            print("Merged auction and price data successfully\nNo missing or excess data\nAll CUSIPs are identical between DataFrames")
+            # print("Merged auction and price data successfully\nNo missing or excess data\nAll CUSIPs are identical between DataFrames")
             ust_set = ust_set.drop(columns=['Buy', 'Sell'])
             ust_set = self._get_ranks(data=ust_set)
             self.ust_set = ust_set.reset_index(drop=False).set_index('Cusip')
@@ -154,8 +154,8 @@ class USTs:
 
         fig.update_layout(
             title='US Treasury Yield Curve',
-            width=1400,
-            height=600,
+            width=1100,
+            height=500,
             margin=dict(l=20, r=20, t=50, b=20),
             xaxis_title='Years to maturity',
             yaxis_title='End-of-Day Yield to Maturity (YTM)',
@@ -317,8 +317,60 @@ class USTs:
         self.trade_screening_set = pd.DataFrame(columns=columns, data=data)
         return self.trade_screening_set.drop(columns=['Duration long', 'Duration short'])
     
-    def plot_trades(self):
-        pass
+    def plot_trade_timeseries(self, start_date: datetime.date, end_date: datetime.date):
+        date_range = pd.date_range(start_date, end_date).to_list()
+        valid_dates = []
+        for date in date_range:
+            if not (date.date().weekday() in [5, 6]) or (date.date() in self.holidays):
+                valid_dates.append(datetime.datetime(date.year, date.month, date.day))
+
+        auction_data = self.auction_data
+        all_data = {}
+        for date in valid_dates:
+            price_data = DataFetcher().fetch_historical_UST_data(date.date())
+            if price_data is not None:
+                price_data = price_data[price_data['Security type'] != 'Bill']
+                settlement = self.adjust_for_bad_day(date + relativedelta(days=1))
+                full_date_data = self.get_current_UST_set(settlement_date=settlement,
+                                                        auction_data=auction_data,
+                                                        price_data=price_data)
+                all_data[date] = full_date_data
+
+        trade_set = self.trade_screening_set
+        for i in range(len(trade_set)):
+            trade_row = trade_set.iloc[i, :]
+            cusips = [self._get_cusip_from_label(trade_row['Long bond']), self._get_cusip_from_label(trade_row['Short bond'])]
+            spread_df = pd.DataFrame(columns=['Long bond yield', 'Short bond yield', 'Spread', 'Par curve spread'])
+            for key in all_data.keys():
+                df = all_data[key]
+                filtered_set = df[(df['Years to maturity'] > 90/365) & (df['Security type'] != 'Bill') & (df['Rank'] > 2)]
+                bspline_model = ParCurves(filtered_set).Bspline_with_knots(knots=[0.5, 1, 2, 3, 5, 7, 8, 9, 10, 15, 20, 25],
+                                                                        return_data=False)
+                otr_set = df[df['Rank'] == 1]
+                interpolator = scipy.interpolate.interp1d(
+                    x=otr_set['Duration'],
+                    y=otr_set['Years to maturity'],
+                    kind='cubic',
+                    fill_value='extrapolate')
+                long_tenor, short_tenor = float(interpolator(trade_row['Duration long'])), float(interpolator(trade_row['Duration short']))
+                par_spread = float(bspline_model(long_tenor) - bspline_model(short_tenor))
+                long_yield = all_data[key].loc[cusips[0], 'EOD YTM']
+                short_yield = all_data[key].loc[cusips[1], 'EOD YTM']
+                long_duration, short_duration = trade_row['Duration long'], trade_row['Duration short']
+                spread_df.loc[key] = [long_yield, short_yield, long_yield-short_yield, par_spread]
+            spread_df['Par curve residual'] = (spread_df['Spread'] - spread_df['Par curve spread'])*100
+            plt.figure(figsize=(12, 6))
+            sns.set_theme(context='notebook', style='darkgrid')
+            sns.lineplot(data=spread_df, x=spread_df.index, y='Par curve residual', color='darkblue', linewidth=1)
+            sns.despine()
+            plt.title(f"{trade_row['Long bond']} / {trade_row['Short bond']} Residual to Par curve", fontdict={'size': 16,
+                                                                                                            'weight': 'normal',
+                                                                                                            'family': 'sans-serif'})
+
+            plt.ylabel("Residual (bps)", fontdict={'size':12})
+            plt.xlabel('Date', fontdict={'size':12})
+            plt.tick_params(axis='both', labelsize=10)
+            plt.show()
 
     def get_bill_discount_rate(self,
                                price: float,

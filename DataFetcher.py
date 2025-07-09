@@ -96,7 +96,7 @@ class DataFetcher:
         data_rows = table.find_all("tr")[1:]
 
         if not data_rows:
-            print("No price information on this date")
+            # print("No price information on this date")
             return None
 
         headers = [th.get_text(strip=True).capitalize() for th in header_row]

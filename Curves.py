@@ -23,7 +23,7 @@ class ParCurves:
         return smooth_spline
     
     def Bspline_with_knots(self,
-                           knots: Optional[np.ndarray] = ,
+                           knots: Optional[np.ndarray],
                            k:int = 3,
                            return_data: bool = True):
         
