@@ -7,3 +7,4 @@ seaborn
 typing
 datetime
 pandas_market_calendars
+scipy

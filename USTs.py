@@ -164,6 +164,7 @@ class USTs:
             template='plotly_dark'
         )
         fig.show()
+        fig.write_image("UST_curve.png", width=1100, height=500)
         
     def get_cusip_timeseries(self, CUSIPs: list, start_date: datetime.date, end_date: datetime.date) -> pd.DataFrame:
         price_data = DataFetcher().fetch_cusip_timeseries(CUSIPs, start_date, end_date)
